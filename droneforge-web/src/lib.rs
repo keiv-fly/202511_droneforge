@@ -10,7 +10,7 @@ impl GameState {
         Self { world: World::new() }
     }
 
-    fn update(&mut self) {
+    fn fixed_update(&mut self) {
         self.world.step();
     }
 
@@ -28,9 +28,17 @@ impl GameState {
 
 pub async fn run() {
     let mut game = GameState::new();
+    let mut accumulator = 0.0_f32;
+    let fixed_step = 1.0_f32 / 60.0_f32; // 60 Hz simulation
 
     loop {
-        game.update();
+        // Consume real elapsed time in fixed-size simulation steps.
+        accumulator += get_frame_time();
+        while accumulator >= fixed_step {
+            game.fixed_update();
+            accumulator -= fixed_step;
+        }
+
         game.render();
 
         next_frame().await;
