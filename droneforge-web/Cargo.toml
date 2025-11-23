@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+name = "droneforge_web_lib"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
@@ -13,3 +14,4 @@ path = "src/main.rs"
 [dependencies]
 macroquad = "0.4"
 droneforge-core = { path = "../droneforge-core" }
+getrandom = { version = "0.3", features = ["wasm_js"] }

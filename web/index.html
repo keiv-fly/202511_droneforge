@@ -7,8 +7,11 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <canvas id="game-canvas"></canvas>
+  <canvas id="glcanvas" tabindex="1"></canvas>
 
-  <script type="module" src="main.js"></script>
+  <script src="mq_js_bundle.js"></script>
+  <script>
+    load("droneforge-web.wasm", { canvas: "glcanvas" });
+  </script>
 </body>
 </html>

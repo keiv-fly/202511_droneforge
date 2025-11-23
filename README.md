@@ -11,17 +11,17 @@ Plumbing to render a black canvas from Rust/macroquad compiled to WASM, with a t
 1) Desktop sanity check (quick):  
 `cargo run -p droneforge-web`
 
-2) Build WASM target:  
+2) Build WASM target (macroquad emits both a lib & bin artifact, we want the bin):  
 `cargo build -p droneforge-web --release --target wasm32-unknown-unknown`
 
-3) Generate JS glue with wasm-bindgen:  
-`wasm-bindgen --target web --no-typescript --out-dir web/wasm --out-name droneforge target/wasm32-unknown-unknown/release/droneforge-web.wasm`
+3) Copy the produced module next to the HTML so `mq_js_bundle.js` can load it:  
+`cp target/wasm32-unknown-unknown/release/droneforge-web.wasm web/droneforge-web.wasm`
 
 4) Serve the `web/` folder and open in browser:  
-`cd web && simple-http-server .`  
-Then open the printed URL (e.g., `http://127.0.0.1:8000/`) to see the black canvas (and tick text).
+`cd web; simple-http-server .`  
+Then open the printed URL (e.g., `http://127.0.0.1:8000/`) to see the black canvas (and tick text).  
+(`web/index.html` already references the vendored `mq_js_bundle.js` from macroquad’s docs.)
 
 ## Prereqs
 - `rustup target add wasm32-unknown-unknown`
 - Install a static server: `cargo install simple-http-server` (or `miniserve`)
-- Optional: `cargo install wasm-bindgen-cli`

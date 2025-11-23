@@ -37,9 +37,3 @@ pub async fn run() {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-#[macroquad::main("Droneforge Web MVP")]
-async fn wasm_entry() {
-    run().await;
-}
-
