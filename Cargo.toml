@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "droneforge-core",
+    "droneforge-web",
+]
+resolver = "2"

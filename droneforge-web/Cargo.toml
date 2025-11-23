@@ -1,0 +1,15 @@
+[package]
+name = "droneforge-web"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "droneforge-web"
+path = "src/main.rs"
+
+[dependencies]
+macroquad = "0.4"
+droneforge-core = { path = "../droneforge-core" }
