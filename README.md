@@ -25,3 +25,8 @@ Then open the printed URL (e.g., `http://127.0.0.1:8000/`) to see the black canv
 ## Prereqs
 - `rustup target add wasm32-unknown-unknown`
 - Install a static server: `cargo install simple-http-server` (or `miniserve`)
+
+## Hosted on GitHub Pages
+
+The game can be checked here:
+https://keiv-fly.github.io/202511_droneforge/
