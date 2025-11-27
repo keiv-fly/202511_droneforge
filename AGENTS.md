@@ -11,6 +11,7 @@
 - Desktop sanity run: `cargo run -p droneforge-web` (opens the Macroquad window).  
 - WASM build: `cargo build -p droneforge-web --release --target wasm32-unknown-unknown`; copy the output with `cp target/wasm32-unknown-unknown/release/droneforge-web.wasm docs/`.  
 - Serve the web build locally: `cd docs && simple-http-server .` (or `miniserve .`) and open the printed URL.
+- Before finishing any agent task, re-run the README flow: build `droneforge-web` for `wasm32-unknown-unknown` and copy the resulting `droneforge-web.wasm` into `docs/` so GitHub Pages stays current.
 
 ## Coding Style & Naming Conventions
 - Rust 2024, 4-space indentation, `snake_case` for functions/variables, `CamelCase` for types. Keep modules small and favor explicit `pub` exposure.  
