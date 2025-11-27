@@ -1,16 +1,11 @@
-use serde::{Deserialize, Serialize};
+pub mod block;
+pub mod chunk;
+pub mod coordinates;
+pub mod storage;
+pub mod world;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct World {
-    pub tick: u64,
-}
-
-impl World {
-    pub fn new() -> Self {
-        Self { tick: 0 }
-    }
-
-    pub fn step(&mut self) {
-        self.tick += 1;
-    }
-}
+pub use block::{Block, BlockId};
+pub use chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkBlocks, ChunkError};
+pub use coordinates::{ChunkPosition, LocalBlockCoord};
+pub use storage::{LoadBlocksFn, SaveBlocksFn, StorageError};
+pub use world::World;
