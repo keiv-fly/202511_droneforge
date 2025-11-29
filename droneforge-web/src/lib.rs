@@ -23,6 +23,13 @@ impl GameState {
             24.0,
             WHITE,
         );
+        draw_text(
+            &format!("Hello"),
+            20.0,
+            80.0,
+            24.0,
+            WHITE,
+        );
     }
 }
 
