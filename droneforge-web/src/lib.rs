@@ -7,7 +7,9 @@ pub struct GameState {
 
 impl GameState {
     pub fn new() -> Self {
-        Self { world: World::new() }
+        Self {
+            world: World::new(),
+        }
     }
 
     fn fixed_update(&mut self) {
@@ -23,6 +25,12 @@ impl GameState {
             24.0,
             WHITE,
         );
+    }
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -44,4 +52,3 @@ pub async fn run() {
         next_frame().await;
     }
 }
-

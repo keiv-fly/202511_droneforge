@@ -8,3 +8,5 @@ target/
 # MSVC debug symbols
 *.pdb
 
+
+docs/droneforge-web.wasm
