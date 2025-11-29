@@ -19,7 +19,7 @@
 
 ## Testing Guidelines
 - Use `cargo test --workspace` as the baseline gate; for new logic in `droneforge-core`, add `#[cfg(test)]` unit tests alongside the implementation.  
-- For rendering or timing changes, document a manual smoke check (native run and `docs/` serve) in the PR description.  
+- For rendering or timing changes, document a manual smoke check (native run and `web/` serve) in the PR description.  
 - Aim to keep builds warning-free under `cargo clippy -- -D warnings`.
 
 ## Commit & Pull Request Guidelines
