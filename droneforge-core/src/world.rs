@@ -2,6 +2,7 @@ use crate::block::BlockId;
 use crate::chunk::{Chunk, ChunkBlocks, ChunkError};
 use crate::coordinates::{ChunkPosition, LocalBlockCoord};
 use crate::storage::{LoadBlocksFn, SaveBlocksFn, StorageError};
+use crate::worldgen::DeterministicMap;
 use std::collections::HashMap;
 
 pub struct World {
@@ -33,6 +34,16 @@ impl World {
         self.chunks
             .entry(position)
             .or_insert_with(|| Chunk::new(position, default_block));
+    }
+
+    pub fn register_generated_chunk(
+        &mut self,
+        position: ChunkPosition,
+        generator: &DeterministicMap,
+    ) {
+        self.chunks
+            .entry(position)
+            .or_insert_with(|| generator.chunk_for_position(position));
     }
 
     pub fn set_block(
@@ -95,10 +106,18 @@ impl World {
     }
 }
 
+impl Default for World {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::WorldCoord;
     use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH};
+    use crate::worldgen::DeterministicMap;
 
     fn test_positions() -> ChunkPosition {
         ChunkPosition::new(0, 0, 0)
@@ -183,6 +202,26 @@ mod tests {
                 .get_block(coord)
                 .unwrap(),
             2
+        );
+    }
+
+    #[test]
+    fn registers_generated_chunk() {
+        let position = test_positions();
+        let mut world = World::new();
+        let generator = DeterministicMap::new(42);
+
+        world.register_generated_chunk(position, &generator);
+
+        let coord = LocalBlockCoord::new(10, 0, 0);
+        assert_eq!(
+            world
+                .chunks
+                .get(&position)
+                .unwrap()
+                .get_block(coord)
+                .unwrap(),
+            generator.block_at(WorldCoord::new(10, 0, 0))
         );
     }
 }
