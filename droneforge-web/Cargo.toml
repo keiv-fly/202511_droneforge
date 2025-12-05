@@ -14,4 +14,3 @@ path = "src/main.rs"
 [dependencies]
 macroquad = "0.4"
 droneforge-core = { path = "../droneforge-core" }
-getrandom = { version = "0.3", features = ["wasm_js"] }

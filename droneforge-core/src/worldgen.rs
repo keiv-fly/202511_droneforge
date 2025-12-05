@@ -1,8 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use fastrand::Rng;
 
 use crate::block::{AIR, BEDROCK, BlockId, DIRT, IRON, STONE};
 use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk};
@@ -55,7 +54,7 @@ impl DeterministicMap {
 
         if coord.x > 0 && (-64..=0).contains(&coord.z) {
             let mut rng = self.rng_for_coord(coord);
-            if rng.random_ratio(5, 100) {
+            if rng.u32(0..100) < 5 {
                 return IRON;
             }
             return STONE;
@@ -88,12 +87,12 @@ impl DeterministicMap {
         chunk
     }
 
-    fn rng_for_coord(&self, coord: WorldCoord) -> StdRng {
+    fn rng_for_coord(&self, coord: WorldCoord) -> Rng {
         let mut hasher = DefaultHasher::new();
         self.seed.hash(&mut hasher);
         coord.hash(&mut hasher);
         let seed = hasher.finish();
-        StdRng::seed_from_u64(seed)
+        Rng::with_seed(seed)
     }
 
     fn within_bounds(&self, coord: WorldCoord) -> bool {
