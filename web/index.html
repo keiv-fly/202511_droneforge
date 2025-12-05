@@ -8,10 +8,30 @@
 </head>
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
+  <div class="z-level-controls" aria-label="Z level controls">
+    <button type="button" id="z-up" class="z-btn" aria-label="Increase level">▲</button>
+    <button type="button" id="z-down" class="z-btn" aria-label="Decrease level">▼</button>
+  </div>
 
   <script src="mq_js_bundle.js"></script>
   <script>
     load("droneforge-web.wasm", { canvas: "glcanvas" });
+  </script>
+  <script>
+    let zLevel = 0;
+
+    function setZLevel(nextZ) {
+      zLevel = nextZ;
+      console.log("Z level:", zLevel);
+    }
+
+    document.getElementById("z-up").addEventListener("click", () => {
+      setZLevel(zLevel + 1);
+    });
+
+    document.getElementById("z-down").addEventListener("click", () => {
+      setZLevel(zLevel - 1);
+    });
   </script>
 </body>
 </html>
