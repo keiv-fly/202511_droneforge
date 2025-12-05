@@ -46,6 +46,10 @@ impl World {
             .or_insert_with(|| generator.chunk_for_position(position));
     }
 
+    pub fn chunk(&self, position: &ChunkPosition) -> Option<&Chunk> {
+        self.chunks.get(position)
+    }
+
     pub fn set_block(
         &mut self,
         chunk: ChunkPosition,
