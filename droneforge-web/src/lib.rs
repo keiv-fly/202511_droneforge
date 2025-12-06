@@ -4,14 +4,35 @@ use droneforge_core::{
     World,
 };
 use macroquad::prelude::*;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 const VIEW_MIN_X: i32 = -100;
 const VIEW_MAX_X: i32 = 100;
 const VIEW_MIN_Y: i32 = -60;
 const VIEW_MAX_Y: i32 = 60;
-const VIEW_Z: i32 = 0;
+const DEFAULT_VIEW_Z: i32 = 0;
 
 const BLOCK_PIXEL_SIZE: u16 = 4;
+
+static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn z_level_up() {
+    queue_z_delta(1);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn z_level_down() {
+    queue_z_delta(-1);
+}
+
+fn queue_z_delta(delta: i32) {
+    PENDING_Z_DELTA.fetch_add(delta, Ordering::SeqCst);
+}
+
+fn take_pending_z_delta() -> i32 {
+    PENDING_Z_DELTA.swap(0, Ordering::SeqCst)
+}
 
 struct ChunkTexture {
     position: ChunkPosition,
@@ -36,33 +57,60 @@ impl BlockPalette {
 pub struct GameState {
     world: World,
     chunk_textures: Vec<ChunkTexture>,
+    generator: DeterministicMap,
+    view_z: i32,
 }
 
 impl GameState {
     pub fn new() -> Self {
-        let mut world = World::new();
-        let palette = BlockPalette;
         let generator = DeterministicMap::new(42);
-        let chunk_z = div_floor(VIEW_Z, CHUNK_HEIGHT as i32);
+        let mut game = Self {
+            world: World::new(),
+            chunk_textures: Vec::new(),
+            generator,
+            view_z: DEFAULT_VIEW_Z,
+        };
 
-        let mut chunk_textures = Vec::new();
+        game.rebuild_chunk_textures();
+        game
+    }
+
+    fn rebuild_chunk_textures(&mut self) {
+        self.chunk_textures.clear();
+
+        let palette = BlockPalette;
+        let chunk_z = div_floor(self.view_z, CHUNK_HEIGHT as i32);
 
         for chunk_y in chunk_range(VIEW_MIN_Y, VIEW_MAX_Y, CHUNK_DEPTH as i32) {
             for chunk_x in chunk_range(VIEW_MIN_X, VIEW_MAX_X, CHUNK_WIDTH as i32) {
                 let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
-                world.register_generated_chunk(position, &generator);
+                self.world
+                    .register_generated_chunk(position, &self.generator);
 
-                if let Some(chunk) = world.chunk(&position) {
-                    let texture = build_chunk_texture(chunk, VIEW_Z, &palette);
-                    chunk_textures.push(ChunkTexture { position, texture });
+                if let Some(chunk) = self.world.chunk(&position) {
+                    let texture = build_chunk_texture(chunk, self.view_z, &palette);
+                    self.chunk_textures.push(ChunkTexture { position, texture });
                 }
             }
         }
+    }
 
-        Self {
-            world,
-            chunk_textures,
+    fn set_view_z(&mut self, next_view_z: i32) {
+        if self.view_z == next_view_z {
+            return;
         }
+
+        self.view_z = next_view_z;
+        self.rebuild_chunk_textures();
+    }
+
+    fn shift_view_z(&mut self, delta: i32) {
+        if delta == 0 {
+            return;
+        }
+
+        let next_view_z = self.view_z.saturating_add(delta);
+        self.set_view_z(next_view_z);
     }
 
     fn fixed_update(&mut self) {
@@ -103,6 +151,8 @@ impl GameState {
             24.0,
             WHITE,
         );
+
+        draw_text(&format!("z: {}", self.view_z), 20.0, 68.0, 24.0, WHITE);
     }
 }
 
@@ -177,6 +227,11 @@ pub async fn run() {
         while accumulator >= fixed_step {
             game.fixed_update();
             accumulator -= fixed_step;
+        }
+
+        let pending_z_delta = take_pending_z_delta();
+        if pending_z_delta != 0 {
+            game.shift_view_z(pending_z_delta);
         }
 
         game.render();
