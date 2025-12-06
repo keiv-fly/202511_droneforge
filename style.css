@@ -1,0 +1,72 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: black;
+  overflow: hidden;
+}
+
+canvas#glcanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#start-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: black;
+  z-index: 2000;
+}
+
+#start-button {
+  font-size: 1.25rem;
+  padding: 1rem 2rem;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  background: white;
+  color: black;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
+}
+
+#start-button:active {
+  transform: scale(0.97);
+}
+
+.z-level-controls {
+  position: fixed;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.z-btn {
+  width: 46px;
+  height: 46px;
+  font-size: 32px;
+  border-radius: 14px;
+  border: none;
+  outline: none;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.z-btn:active {
+  transform: translateY(1px) scale(0.97);
+  background: rgba(0, 0, 0, 0.8);
+}
