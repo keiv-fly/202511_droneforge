@@ -50,15 +50,6 @@ fn clamp_zoom_power(power: i32) -> i32 {
     power.clamp(MIN_ZOOM_POWER, MAX_ZOOM_POWER)
 }
 
-fn zoom_power_for_scale(scale: f32) -> i32 {
-    if scale <= 0.0 {
-        return MIN_ZOOM_POWER;
-    }
-
-    let power = (scale / BASE_ZOOM_AT_POWER_ZERO).ln() / ZOOM_FACTOR.ln();
-    clamp_zoom_power(power.round() as i32)
-}
-
 struct ChunkTexture {
     position: ChunkPosition,
     texture: Texture2D,
@@ -94,7 +85,7 @@ pub struct GameState {
 impl GameState {
     pub fn new() -> Self {
         let generator = DeterministicMap::new(42);
-        let initial_zoom_power = zoom_power_for_scale(1.0);
+        let initial_zoom_power = 0;
         let mut game = Self {
             world: World::new(),
             chunk_textures: Vec::new(),
