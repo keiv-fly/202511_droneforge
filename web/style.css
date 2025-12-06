@@ -55,7 +55,7 @@ canvas#glcanvas {
   width: 46px;
   height: 46px;
   font-size: 32px;
-  border-radius: 12px;
+  border-radius: 14px;
   border: none;
   outline: none;
   background: rgba(0, 0, 0, 0.6);
