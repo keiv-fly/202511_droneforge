@@ -9,4 +9,4 @@ target/
 *.pdb
 
 
-docs/droneforge-web.wasm
+*.wasm
