@@ -13,8 +13,9 @@ const VIEW_MAX_Y: i32 = 60;
 const DEFAULT_VIEW_Z: i32 = 0;
 
 const BLOCK_PIXEL_SIZE: u16 = 4;
-const MIN_ZOOM: f32 = 0.20;
-const MAX_ZOOM: f32 = 4.0;
+const BASE_ZOOM_AT_POWER_ZERO: f32 = 3.8;
+const MIN_ZOOM_POWER: i32 = -48;
+const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
 
 static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
@@ -35,6 +36,27 @@ fn queue_z_delta(delta: i32) {
 
 fn take_pending_z_delta() -> i32 {
     PENDING_Z_DELTA.swap(0, Ordering::SeqCst)
+}
+
+fn zoom_scale_from_power(power: i32) -> f32 {
+    BASE_ZOOM_AT_POWER_ZERO * ZOOM_FACTOR.powi(power)
+}
+
+fn normalized_zoom_from_power(power: i32) -> f32 {
+    ZOOM_FACTOR.powi(power)
+}
+
+fn clamp_zoom_power(power: i32) -> i32 {
+    power.clamp(MIN_ZOOM_POWER, MAX_ZOOM_POWER)
+}
+
+fn zoom_power_for_scale(scale: f32) -> i32 {
+    if scale <= 0.0 {
+        return MIN_ZOOM_POWER;
+    }
+
+    let power = (scale / BASE_ZOOM_AT_POWER_ZERO).ln() / ZOOM_FACTOR.ln();
+    clamp_zoom_power(power.round() as i32)
 }
 
 struct ChunkTexture {
@@ -63,6 +85,7 @@ pub struct GameState {
     generator: DeterministicMap,
     view_z: i32,
     zoom: f32,
+    zoom_power: i32,
     camera_offset_x: f32,
     camera_offset_y: f32,
     camera_initialized: bool,
@@ -71,12 +94,14 @@ pub struct GameState {
 impl GameState {
     pub fn new() -> Self {
         let generator = DeterministicMap::new(42);
+        let initial_zoom_power = zoom_power_for_scale(1.0);
         let mut game = Self {
             world: World::new(),
             chunk_textures: Vec::new(),
             generator,
             view_z: DEFAULT_VIEW_Z,
-            zoom: 1.0,
+            zoom: zoom_scale_from_power(initial_zoom_power),
+            zoom_power: initial_zoom_power,
             camera_offset_x: 0.0,
             camera_offset_y: 0.0,
             camera_initialized: false,
@@ -150,6 +175,7 @@ impl GameState {
         clear_background(BLACK);
 
         let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
+        let normalized_zoom = normalized_zoom_from_power(self.zoom_power);
         let chunk_pixel_size = vec2(
             CHUNK_WIDTH as f32 * effective_block_size,
             CHUNK_DEPTH as f32 * effective_block_size,
@@ -182,6 +208,14 @@ impl GameState {
             WHITE,
         );
 
+        draw_text(
+            &format!("zoom power: {}", self.zoom_power),
+            20.0,
+            68.0,
+            24.0,
+            WHITE,
+        );
+
         let (mouse_x, mouse_y) = mouse_position();
         let tile_x = (((mouse_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
         let tile_y = (((mouse_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
@@ -190,7 +224,7 @@ impl GameState {
         draw_text(
             &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
             20.0,
-            68.0,
+            96.0,
             24.0,
             WHITE,
         );
@@ -203,13 +237,13 @@ impl GameState {
         draw_text(
             &format!("center: {}, {}, {}", center_tile_x, center_tile_y, self.view_z),
             20.0,
-            96.0,
+            124.0,
             24.0,
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 124.0, 24.0, WHITE);
-        draw_text(&format!("zoom: {:.2}x", self.zoom), 20.0, 152.0, 24.0, WHITE);
+        draw_text(&format!("z: {}", self.view_z), 20.0, 152.0, 24.0, WHITE);
+        draw_text(&format!("zoom: {:.2}x", normalized_zoom), 20.0, 180.0, 24.0, WHITE);
     }
 }
 
@@ -295,23 +329,24 @@ pub async fn run() {
         // Handle mouse wheel zoom around screen center
         let (_wheel_x, wheel_y) = mouse_wheel();
         if wheel_y != 0.0 {
-            let old_zoom = game.zoom;
-            let new_zoom = game.zoom * (ZOOM_FACTOR.powf(wheel_y.signum()));
-            if new_zoom != old_zoom {
+            let power_delta = wheel_y.signum() as i32;
+            let next_zoom_power = clamp_zoom_power(game.zoom_power + power_delta);
+            if next_zoom_power != game.zoom_power {
                 // Calculate screen center
                 let screen_center_x = screen_width() / 2.0;
                 let screen_center_y = screen_height() / 2.0;
-                
+
                 // Calculate world position at screen center before zoom
-                let old_effective_size = BLOCK_PIXEL_SIZE as f32 * old_zoom;
+                let old_effective_size = BLOCK_PIXEL_SIZE as f32 * game.zoom;
                 let world_x_at_center = ((screen_center_x - game.camera_offset_x) / old_effective_size) + VIEW_MIN_X as f32;
                 let world_y_at_center = ((screen_center_y - game.camera_offset_y) / old_effective_size) + VIEW_MIN_Y as f32;
-                
-                // Update zoom
-                game.zoom = new_zoom;
-                
+
+                // Update zoom power and derived zoom scale
+                game.zoom_power = next_zoom_power;
+                game.zoom = zoom_scale_from_power(game.zoom_power);
+
                 // Adjust camera offset so same world position stays at screen center
-                let new_effective_size = BLOCK_PIXEL_SIZE as f32 * new_zoom;
+                let new_effective_size = BLOCK_PIXEL_SIZE as f32 * game.zoom;
                 game.camera_offset_x = screen_center_x - (world_x_at_center - VIEW_MIN_X as f32) * new_effective_size;
                 game.camera_offset_y = screen_center_y - (world_y_at_center - VIEW_MIN_Y as f32) * new_effective_size;
             }
