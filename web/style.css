@@ -13,6 +13,33 @@ canvas#glcanvas {
   display: block;
 }
 
+#start-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: black;
+  z-index: 2000;
+}
+
+#start-button {
+  font-size: 1.25rem;
+  padding: 1rem 2rem;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  background: white;
+  color: black;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
+}
+
+#start-button:active {
+  transform: scale(0.97);
+}
+
 .z-level-controls {
   position: fixed;
   right: 16px;
