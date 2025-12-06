@@ -13,9 +13,9 @@ const VIEW_MAX_Y: i32 = 60;
 const DEFAULT_VIEW_Z: i32 = 0;
 
 const BLOCK_PIXEL_SIZE: u16 = 4;
-const MIN_ZOOM: f32 = 0.25;
+const MIN_ZOOM: f32 = 0.20;
 const MAX_ZOOM: f32 = 4.0;
-const ZOOM_STEP: f32 = 0.1;
+const ZOOM_FACTOR: f32 = 1.1;
 
 static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 
@@ -63,6 +63,9 @@ pub struct GameState {
     generator: DeterministicMap,
     view_z: i32,
     zoom: f32,
+    camera_offset_x: f32,
+    camera_offset_y: f32,
+    camera_initialized: bool,
 }
 
 impl GameState {
@@ -74,10 +77,31 @@ impl GameState {
             generator,
             view_z: DEFAULT_VIEW_Z,
             zoom: 1.0,
+            camera_offset_x: 0.0,
+            camera_offset_y: 0.0,
+            camera_initialized: false,
         };
 
         game.rebuild_chunk_textures();
         game
+    }
+
+    fn initialize_camera_center(&mut self) {
+        if !self.camera_initialized {
+            let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
+            let screen_center_x = screen_width() / 2.0;
+            let screen_center_y = screen_height() / 2.0;
+            
+            // Set camera offset so world (0, 0) is at screen center
+            // screen_x = (world_x - VIEW_MIN_X) * effective_block_size + camera_offset_x
+            // For world (0, 0) at screen center:
+            // screen_center_x = (0 - VIEW_MIN_X) * effective_block_size + camera_offset_x
+            // camera_offset_x = screen_center_x - (0 - VIEW_MIN_X) * effective_block_size
+            self.camera_offset_x = screen_center_x - (0.0 - VIEW_MIN_X as f32) * effective_block_size;
+            self.camera_offset_y = screen_center_y - (0.0 - VIEW_MIN_Y as f32) * effective_block_size;
+            
+            self.camera_initialized = true;
+        }
     }
 
     fn rebuild_chunk_textures(&mut self) {
@@ -135,8 +159,8 @@ impl GameState {
             let world_origin_x = chunk_texture.position.x * CHUNK_WIDTH as i32;
             let world_origin_y = chunk_texture.position.y * CHUNK_DEPTH as i32;
 
-            let screen_x = (world_origin_x - VIEW_MIN_X) as f32 * effective_block_size;
-            let screen_y = (world_origin_y - VIEW_MIN_Y) as f32 * effective_block_size;
+            let screen_x = (world_origin_x - VIEW_MIN_X) as f32 * effective_block_size + self.camera_offset_x;
+            let screen_y = (world_origin_y - VIEW_MIN_Y) as f32 * effective_block_size + self.camera_offset_y;
 
             draw_texture_ex(
                 &chunk_texture.texture,
@@ -159,8 +183,8 @@ impl GameState {
         );
 
         let (mouse_x, mouse_y) = mouse_position();
-        let tile_x = ((mouse_x / effective_block_size) + VIEW_MIN_X as f32) as i32;
-        let tile_y = ((mouse_y / effective_block_size) + VIEW_MIN_Y as f32) as i32;
+        let tile_x = (((mouse_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
+        let tile_y = (((mouse_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
         let tile_z = self.view_z;
 
         draw_text(
@@ -171,8 +195,21 @@ impl GameState {
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 96.0, 24.0, WHITE);
-        draw_text(&format!("zoom: {:.2}x", self.zoom), 20.0, 124.0, 24.0, WHITE);
+        let screen_center_x = screen_width() / 2.0;
+        let screen_center_y = screen_height() / 2.0;
+        let center_tile_x = (((screen_center_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
+        let center_tile_y = (((screen_center_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
+
+        draw_text(
+            &format!("center: {}, {}, {}", center_tile_x, center_tile_y, self.view_z),
+            20.0,
+            96.0,
+            24.0,
+            WHITE,
+        );
+
+        draw_text(&format!("z: {}", self.view_z), 20.0, 124.0, 24.0, WHITE);
+        draw_text(&format!("zoom: {:.2}x", self.zoom), 20.0, 152.0, 24.0, WHITE);
     }
 }
 
@@ -238,6 +275,7 @@ fn div_floor(a: i32, b: i32) -> i32 {
 
 pub async fn run() {
     let mut game = GameState::new();
+    game.initialize_camera_center();
     let mut accumulator = 0.0_f32;
     let fixed_step = 1.0_f32 / 60.0_f32; // 60 Hz simulation
 
@@ -254,11 +292,29 @@ pub async fn run() {
             game.shift_view_z(pending_z_delta);
         }
 
-        // Handle mouse wheel zoom
+        // Handle mouse wheel zoom around screen center
         let (_wheel_x, wheel_y) = mouse_wheel();
         if wheel_y != 0.0 {
-            let zoom_delta = wheel_y.signum() * ZOOM_STEP;
-            game.zoom = (game.zoom + zoom_delta).clamp(MIN_ZOOM, MAX_ZOOM);
+            let old_zoom = game.zoom;
+            let new_zoom = game.zoom * (ZOOM_FACTOR.powf(wheel_y.signum()));
+            if new_zoom != old_zoom {
+                // Calculate screen center
+                let screen_center_x = screen_width() / 2.0;
+                let screen_center_y = screen_height() / 2.0;
+                
+                // Calculate world position at screen center before zoom
+                let old_effective_size = BLOCK_PIXEL_SIZE as f32 * old_zoom;
+                let world_x_at_center = ((screen_center_x - game.camera_offset_x) / old_effective_size) + VIEW_MIN_X as f32;
+                let world_y_at_center = ((screen_center_y - game.camera_offset_y) / old_effective_size) + VIEW_MIN_Y as f32;
+                
+                // Update zoom
+                game.zoom = new_zoom;
+                
+                // Adjust camera offset so same world position stays at screen center
+                let new_effective_size = BLOCK_PIXEL_SIZE as f32 * new_zoom;
+                game.camera_offset_x = screen_center_x - (world_x_at_center - VIEW_MIN_X as f32) * new_effective_size;
+                game.camera_offset_y = screen_center_y - (world_y_at_center - VIEW_MIN_Y as f32) * new_effective_size;
+            }
         }
 
         game.render();
