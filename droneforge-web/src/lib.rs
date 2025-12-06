@@ -13,6 +13,9 @@ const VIEW_MAX_Y: i32 = 60;
 const DEFAULT_VIEW_Z: i32 = 0;
 
 const BLOCK_PIXEL_SIZE: u16 = 4;
+const MIN_ZOOM: f32 = 0.25;
+const MAX_ZOOM: f32 = 4.0;
+const ZOOM_STEP: f32 = 0.1;
 
 static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 
@@ -59,6 +62,7 @@ pub struct GameState {
     chunk_textures: Vec<ChunkTexture>,
     generator: DeterministicMap,
     view_z: i32,
+    zoom: f32,
 }
 
 impl GameState {
@@ -69,6 +73,7 @@ impl GameState {
             chunk_textures: Vec::new(),
             generator,
             view_z: DEFAULT_VIEW_Z,
+            zoom: 1.0,
         };
 
         game.rebuild_chunk_textures();
@@ -120,17 +125,18 @@ impl GameState {
     fn render(&self) {
         clear_background(BLACK);
 
+        let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
         let chunk_pixel_size = vec2(
-            CHUNK_WIDTH as f32 * BLOCK_PIXEL_SIZE as f32,
-            CHUNK_DEPTH as f32 * BLOCK_PIXEL_SIZE as f32,
+            CHUNK_WIDTH as f32 * effective_block_size,
+            CHUNK_DEPTH as f32 * effective_block_size,
         );
 
         for chunk_texture in &self.chunk_textures {
             let world_origin_x = chunk_texture.position.x * CHUNK_WIDTH as i32;
             let world_origin_y = chunk_texture.position.y * CHUNK_DEPTH as i32;
 
-            let screen_x = (world_origin_x - VIEW_MIN_X) as f32 * BLOCK_PIXEL_SIZE as f32;
-            let screen_y = (world_origin_y - VIEW_MIN_Y) as f32 * BLOCK_PIXEL_SIZE as f32;
+            let screen_x = (world_origin_x - VIEW_MIN_X) as f32 * effective_block_size;
+            let screen_y = (world_origin_y - VIEW_MIN_Y) as f32 * effective_block_size;
 
             draw_texture_ex(
                 &chunk_texture.texture,
@@ -153,8 +159,8 @@ impl GameState {
         );
 
         let (mouse_x, mouse_y) = mouse_position();
-        let tile_x = ((mouse_x / BLOCK_PIXEL_SIZE as f32) + VIEW_MIN_X as f32) as i32;
-        let tile_y = ((mouse_y / BLOCK_PIXEL_SIZE as f32) + VIEW_MIN_Y as f32) as i32;
+        let tile_x = ((mouse_x / effective_block_size) + VIEW_MIN_X as f32) as i32;
+        let tile_y = ((mouse_y / effective_block_size) + VIEW_MIN_Y as f32) as i32;
         let tile_z = self.view_z;
 
         draw_text(
@@ -166,6 +172,7 @@ impl GameState {
         );
 
         draw_text(&format!("z: {}", self.view_z), 20.0, 96.0, 24.0, WHITE);
+        draw_text(&format!("zoom: {:.2}x", self.zoom), 20.0, 124.0, 24.0, WHITE);
     }
 }
 
@@ -245,6 +252,13 @@ pub async fn run() {
         let pending_z_delta = take_pending_z_delta();
         if pending_z_delta != 0 {
             game.shift_view_z(pending_z_delta);
+        }
+
+        // Handle mouse wheel zoom
+        let (_wheel_x, wheel_y) = mouse_wheel();
+        if wheel_y != 0.0 {
+            let zoom_delta = wheel_y.signum() * ZOOM_STEP;
+            game.zoom = (game.zoom + zoom_delta).clamp(MIN_ZOOM, MAX_ZOOM);
         }
 
         game.render();
