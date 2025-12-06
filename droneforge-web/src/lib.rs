@@ -152,7 +152,20 @@ impl GameState {
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 68.0, 24.0, WHITE);
+        let (mouse_x, mouse_y) = mouse_position();
+        let tile_x = ((mouse_x / BLOCK_PIXEL_SIZE as f32) + VIEW_MIN_X as f32) as i32;
+        let tile_y = ((mouse_y / BLOCK_PIXEL_SIZE as f32) + VIEW_MIN_Y as f32) as i32;
+        let tile_z = self.view_z;
+
+        draw_text(
+            &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
+            20.0,
+            68.0,
+            24.0,
+            WHITE,
+        );
+
+        draw_text(&format!("z: {}", self.view_z), 20.0, 96.0, 24.0, WHITE);
     }
 }
 
