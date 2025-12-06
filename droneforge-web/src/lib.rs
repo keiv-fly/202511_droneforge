@@ -80,6 +80,7 @@ pub struct GameState {
     camera_offset_x: f32,
     camera_offset_y: f32,
     camera_initialized: bool,
+    last_pinch_distance: Option<f32>,
 }
 
 impl GameState {
@@ -96,6 +97,7 @@ impl GameState {
             camera_offset_x: 0.0,
             camera_offset_y: 0.0,
             camera_initialized: false,
+            last_pinch_distance: None,
         };
 
         game.rebuild_chunk_textures();
@@ -107,15 +109,17 @@ impl GameState {
             let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
             let screen_center_x = screen_width() / 2.0;
             let screen_center_y = screen_height() / 2.0;
-            
+
             // Set camera offset so world (0, 0) is at screen center
             // screen_x = (world_x - VIEW_MIN_X) * effective_block_size + camera_offset_x
             // For world (0, 0) at screen center:
             // screen_center_x = (0 - VIEW_MIN_X) * effective_block_size + camera_offset_x
             // camera_offset_x = screen_center_x - (0 - VIEW_MIN_X) * effective_block_size
-            self.camera_offset_x = screen_center_x - (0.0 - VIEW_MIN_X as f32) * effective_block_size;
-            self.camera_offset_y = screen_center_y - (0.0 - VIEW_MIN_Y as f32) * effective_block_size;
-            
+            self.camera_offset_x =
+                screen_center_x - (0.0 - VIEW_MIN_X as f32) * effective_block_size;
+            self.camera_offset_y =
+                screen_center_y - (0.0 - VIEW_MIN_Y as f32) * effective_block_size;
+
             self.camera_initialized = true;
         }
     }
@@ -158,6 +162,32 @@ impl GameState {
         self.set_view_z(next_view_z);
     }
 
+    fn apply_zoom_power_delta(&mut self, power_delta: i32, focus_screen: Vec2) {
+        if power_delta == 0 {
+            return;
+        }
+
+        let next_zoom_power = clamp_zoom_power(self.zoom_power + power_delta);
+        if next_zoom_power == self.zoom_power {
+            return;
+        }
+
+        let old_effective_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
+        let world_x_at_focus =
+            ((focus_screen.x - self.camera_offset_x) / old_effective_size) + VIEW_MIN_X as f32;
+        let world_y_at_focus =
+            ((focus_screen.y - self.camera_offset_y) / old_effective_size) + VIEW_MIN_Y as f32;
+
+        self.zoom_power = next_zoom_power;
+        self.zoom = zoom_scale_from_power(self.zoom_power);
+
+        let new_effective_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
+        self.camera_offset_x =
+            focus_screen.x - (world_x_at_focus - VIEW_MIN_X as f32) * new_effective_size;
+        self.camera_offset_y =
+            focus_screen.y - (world_y_at_focus - VIEW_MIN_Y as f32) * new_effective_size;
+    }
+
     fn fixed_update(&mut self) {
         self.world.step();
     }
@@ -176,8 +206,10 @@ impl GameState {
             let world_origin_x = chunk_texture.position.x * CHUNK_WIDTH as i32;
             let world_origin_y = chunk_texture.position.y * CHUNK_DEPTH as i32;
 
-            let screen_x = (world_origin_x - VIEW_MIN_X) as f32 * effective_block_size + self.camera_offset_x;
-            let screen_y = (world_origin_y - VIEW_MIN_Y) as f32 * effective_block_size + self.camera_offset_y;
+            let screen_x =
+                (world_origin_x - VIEW_MIN_X) as f32 * effective_block_size + self.camera_offset_x;
+            let screen_y =
+                (world_origin_y - VIEW_MIN_Y) as f32 * effective_block_size + self.camera_offset_y;
 
             draw_texture_ex(
                 &chunk_texture.texture,
@@ -208,8 +240,10 @@ impl GameState {
         );
 
         let (mouse_x, mouse_y) = mouse_position();
-        let tile_x = (((mouse_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
-        let tile_y = (((mouse_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
+        let tile_x =
+            (((mouse_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
+        let tile_y =
+            (((mouse_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
         let tile_z = self.view_z;
 
         draw_text(
@@ -222,11 +256,16 @@ impl GameState {
 
         let screen_center_x = screen_width() / 2.0;
         let screen_center_y = screen_height() / 2.0;
-        let center_tile_x = (((screen_center_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
-        let center_tile_y = (((screen_center_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
+        let center_tile_x = (((screen_center_x - self.camera_offset_x) / effective_block_size)
+            + VIEW_MIN_X as f32) as i32;
+        let center_tile_y = (((screen_center_y - self.camera_offset_y) / effective_block_size)
+            + VIEW_MIN_Y as f32) as i32;
 
         draw_text(
-            &format!("center: {}, {}, {}", center_tile_x, center_tile_y, self.view_z),
+            &format!(
+                "center: {}, {}, {}",
+                center_tile_x, center_tile_y, self.view_z
+            ),
             20.0,
             124.0,
             24.0,
@@ -234,7 +273,13 @@ impl GameState {
         );
 
         draw_text(&format!("z: {}", self.view_z), 20.0, 152.0, 24.0, WHITE);
-        draw_text(&format!("zoom: {:.2}x", normalized_zoom), 20.0, 180.0, 24.0, WHITE);
+        draw_text(
+            &format!("zoom: {:.2}x", normalized_zoom),
+            20.0,
+            180.0,
+            24.0,
+            WHITE,
+        );
     }
 }
 
@@ -317,30 +362,37 @@ pub async fn run() {
             game.shift_view_z(pending_z_delta);
         }
 
+        // Handle pinch zoom on touch devices
+        let active_touches = touches();
+        if active_touches.len() >= 2 {
+            let p1 = active_touches[0].position;
+            let p2 = active_touches[1].position;
+            let pinch_distance = p1.distance(p2);
+            let pinch_focus = (p1 + p2) / 2.0;
+
+            if let Some(previous_distance) = game.last_pinch_distance {
+                let distance_delta = pinch_distance - previous_distance;
+                if distance_delta.abs() > 2.0 && previous_distance > 0.0 {
+                    let scale = pinch_distance / previous_distance;
+                    let power_delta = (scale.ln() / ZOOM_FACTOR.ln()).round() as i32;
+                    let clamped_delta = power_delta.clamp(-3, 3);
+                    if clamped_delta != 0 {
+                        game.apply_zoom_power_delta(clamped_delta, pinch_focus);
+                    }
+                }
+            }
+
+            game.last_pinch_distance = Some(pinch_distance);
+        } else {
+            game.last_pinch_distance = None;
+        }
+
         // Handle mouse wheel zoom around screen center
         let (_wheel_x, wheel_y) = mouse_wheel();
         if wheel_y != 0.0 {
+            let screen_center = vec2(screen_width() / 2.0, screen_height() / 2.0);
             let power_delta = wheel_y.signum() as i32;
-            let next_zoom_power = clamp_zoom_power(game.zoom_power + power_delta);
-            if next_zoom_power != game.zoom_power {
-                // Calculate screen center
-                let screen_center_x = screen_width() / 2.0;
-                let screen_center_y = screen_height() / 2.0;
-
-                // Calculate world position at screen center before zoom
-                let old_effective_size = BLOCK_PIXEL_SIZE as f32 * game.zoom;
-                let world_x_at_center = ((screen_center_x - game.camera_offset_x) / old_effective_size) + VIEW_MIN_X as f32;
-                let world_y_at_center = ((screen_center_y - game.camera_offset_y) / old_effective_size) + VIEW_MIN_Y as f32;
-
-                // Update zoom power and derived zoom scale
-                game.zoom_power = next_zoom_power;
-                game.zoom = zoom_scale_from_power(game.zoom_power);
-
-                // Adjust camera offset so same world position stays at screen center
-                let new_effective_size = BLOCK_PIXEL_SIZE as f32 * game.zoom;
-                game.camera_offset_x = screen_center_x - (world_x_at_center - VIEW_MIN_X as f32) * new_effective_size;
-                game.camera_offset_y = screen_center_y - (world_y_at_center - VIEW_MIN_Y as f32) * new_effective_size;
-            }
+            game.apply_zoom_power_delta(power_delta, screen_center);
         }
 
         game.render();
