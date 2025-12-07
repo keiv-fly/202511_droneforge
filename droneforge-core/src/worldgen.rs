@@ -34,7 +34,7 @@ impl DeterministicMap {
         }
 
         if coord.x <= 0 {
-            if coord.z == 0 && (-5..=0).contains(&coord.x) {
+            if (-4..=0).contains(&coord.z) {
                 return DIRT;
             }
 
@@ -49,7 +49,8 @@ impl DeterministicMap {
             return AIR;
         }
 
-        if coord.x + coord.z > 0 && (-64..=0).contains(&coord.z) {
+        if (coord.x > 0 && (-64..=0).contains(&coord.z))||
+        (coord.x - coord.z + 1 > 0 && coord.z > 0) {
             let mut rng = self.rng_for_coord(coord);
             if rng.u32(0..100) < 5 {
                 return IRON;
