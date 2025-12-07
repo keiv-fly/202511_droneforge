@@ -12,8 +12,9 @@ const VIEW_MIN_Y: i32 = -60;
 const VIEW_MAX_Y: i32 = 60;
 const DEFAULT_VIEW_Z: i32 = 0;
 
-const BLOCK_PIXEL_SIZE: u16 = 4;
-const BASE_ZOOM_AT_POWER_ZERO: f32 = 3.8;
+const BLOCK_PIXEL_SIZE: u16 = 64;
+// Keep effective block size at power 0 the same as before (4 px * 3.8).
+const BASE_ZOOM_AT_POWER_ZERO: f32 = 0.2375;
 const MIN_ZOOM_POWER: i32 = -48;
 const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
@@ -418,6 +419,7 @@ fn build_chunk_texture(
                 let edge_color = wall_edge_tint(source_color);
                 let mask = wall_edge_mask(world, generator, world_x, world_y, z_wall);
                 draw_wall_overlay(&mut image, x, y, base_color, edge_color, mask);
+                draw_wall_outline(&mut image, x, y, mask);
             }
         }
     }
@@ -434,6 +436,21 @@ fn fill_block(image: &mut Image, block_x: usize, block_y: usize, color: Color) {
     for dy in 0..BLOCK_PIXEL_SIZE as u32 {
         for dx in 0..BLOCK_PIXEL_SIZE as u32 {
             image.set_pixel(pixel_x + dx, pixel_y + dy, color);
+        }
+    }
+}
+
+fn fill_rect(
+    image: &mut Image,
+    start_x: u32,
+    start_y: u32,
+    width: u32,
+    height: u32,
+    color: Color,
+) {
+    for dy in 0..height {
+        for dx in 0..width {
+            image.set_pixel(start_x + dx, start_y + dy, color);
         }
     }
 }
@@ -538,31 +555,144 @@ fn draw_wall_overlay(
     let size = BLOCK_PIXEL_SIZE as u32;
     let start_x = block_x as u32 * size;
     let start_y = block_y as u32 * size;
+    let rim_thickness = (size / 4).max(2); // bright overlay thickness
+    let outline_thickness = (rim_thickness / 4).max(1); // must match outline
+
+    // Keep the bright rim just inside the outermost outline so black can be outermost.
+    // For north/south we inset by the outline thickness on Y; for east/west on X.
+    let north_y = start_y + outline_thickness;
+    let south_y = start_y + size.saturating_sub(outline_thickness + rim_thickness);
+    let west_x = start_x + outline_thickness;
+    let east_x = start_x + size.saturating_sub(outline_thickness + rim_thickness);
 
     if mask & MASK_NORTH != 0 {
-        for dx in 0..size {
-            image.set_pixel(start_x + dx, start_y, edge_color);
-        }
+        fill_rect(image, start_x, north_y, size, rim_thickness, edge_color);
     }
 
     if mask & MASK_EAST != 0 {
-        let x = start_x + size - 1;
-        for dy in 0..size {
-            image.set_pixel(x, start_y + dy, edge_color);
-        }
+        fill_rect(
+            image,
+            east_x,
+            start_y,
+            rim_thickness,
+            size,
+            edge_color,
+        );
     }
 
     if mask & MASK_SOUTH != 0 {
-        let y = start_y + size - 1;
-        for dx in 0..size {
-            image.set_pixel(start_x + dx, y, edge_color);
-        }
+        fill_rect(
+            image,
+            start_x,
+            south_y,
+            size,
+            rim_thickness,
+            edge_color,
+        );
     }
 
     if mask & MASK_WEST != 0 {
-        for dy in 0..size {
-            image.set_pixel(start_x, start_y + dy, edge_color);
-        }
+        fill_rect(image, west_x, start_y, rim_thickness, size, edge_color);
+    }
+}
+
+fn draw_wall_outline(image: &mut Image, block_x: usize, block_y: usize, mask: u8) {
+    if mask == 0 {
+        return;
+    }
+
+    let size = BLOCK_PIXEL_SIZE as u32;
+    // Outer black outline thickness: 1/16 of block (same fraction as before), min 1px.
+    let outline_thickness = (size / 16).max(1);
+    let start_x = block_x as u32 * size;
+    let start_y = block_y as u32 * size;
+
+    if mask & MASK_NORTH != 0 {
+        fill_rect(
+            image,
+            start_x,
+            start_y,
+            size,
+            outline_thickness,
+            BLACK,
+        );
+    }
+
+    if mask & MASK_EAST != 0 {
+        fill_rect(
+            image,
+            start_x + size.saturating_sub(outline_thickness),
+            start_y,
+            outline_thickness,
+            size,
+            BLACK,
+        );
+    }
+
+    if mask & MASK_SOUTH != 0 {
+        fill_rect(
+            image,
+            start_x,
+            start_y + size.saturating_sub(outline_thickness),
+            size,
+            outline_thickness,
+            BLACK,
+        );
+    }
+
+    if mask & MASK_WEST != 0 {
+        fill_rect(
+            image,
+            start_x,
+            start_y,
+            outline_thickness,
+            size,
+            BLACK,
+        );
+    }
+
+    if mask & MASK_NORTH != 0 && mask & MASK_WEST != 0 {
+        fill_rect(
+            image,
+            start_x,
+            start_y,
+            outline_thickness,
+            outline_thickness,
+            BLACK,
+        );
+    }
+
+    if mask & MASK_NORTH != 0 && mask & MASK_EAST != 0 {
+        fill_rect(
+            image,
+            start_x + size.saturating_sub(outline_thickness),
+            start_y,
+            outline_thickness,
+            outline_thickness,
+            BLACK,
+        );
+    }
+
+    if mask & MASK_SOUTH != 0 && mask & MASK_WEST != 0 {
+        fill_rect(
+            image,
+            start_x,
+            start_y + size.saturating_sub(outline_thickness),
+            outline_thickness,
+            outline_thickness,
+            BLACK,
+        );
+    }
+
+    if mask & MASK_SOUTH != 0 && mask & MASK_EAST != 0 {
+        fill_rect(
+            image,
+            start_x + size.saturating_sub(outline_thickness),
+            start_y + size.saturating_sub(outline_thickness),
+            outline_thickness,
+            outline_thickness,
+            BLACK,
+        );
     }
 }
 
