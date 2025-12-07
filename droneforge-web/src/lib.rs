@@ -1,7 +1,7 @@
 use droneforge_core::worldgen::DeterministicMap;
 use droneforge_core::{
     AIR, BEDROCK, BlockId, CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkPosition, LocalBlockCoord,
-    World,
+    World, WorldCoord,
 };
 use macroquad::prelude::*;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -19,6 +19,11 @@ const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
 
 static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
+
+const MASK_NORTH: u8 = 1;
+const MASK_EAST: u8 = 2;
+const MASK_SOUTH: u8 = 4;
+const MASK_WEST: u8 = 8;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn z_level_up() {
@@ -139,9 +144,13 @@ impl GameState {
                 let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
                 self.world
                     .register_generated_chunk(position, &self.generator);
+                let upper_position = ChunkPosition::new(chunk_x, chunk_y, chunk_z + 1);
+                self.world
+                    .register_generated_chunk(upper_position, &self.generator);
 
                 if let Some(chunk) = self.world.chunk(&position) {
-                    let texture = build_chunk_texture(chunk, self.view_z, &palette);
+                    let texture =
+                        build_chunk_texture(chunk, &self.world, &self.generator, self.view_z, &palette);
                     self.chunk_textures.push(ChunkTexture { position, texture });
                 }
             }
@@ -373,6 +382,8 @@ impl Default for GameState {
 
 fn build_chunk_texture(
     chunk: &droneforge_core::Chunk,
+    world: &World,
+    generator: &DeterministicMap,
     world_z: i32,
     palette: &BlockPalette,
 ) -> Texture2D {
@@ -383,6 +394,9 @@ fn build_chunk_texture(
 
     let chunk_base_z = chunk.position.z * CHUNK_HEIGHT as i32;
     let local_z = (world_z - chunk_base_z) as usize;
+    let chunk_base_x = chunk.position.x * CHUNK_WIDTH as i32;
+    let chunk_base_y = chunk.position.y * CHUNK_DEPTH as i32;
+    let z_wall = world_z + 1;
 
     debug_assert!(local_z < CHUNK_HEIGHT);
 
@@ -393,6 +407,18 @@ fn build_chunk_texture(
                 .unwrap_or(AIR);
             let color = palette.color_for(block);
             fill_block(&mut image, x, y, color);
+
+            let world_x = chunk_base_x + x as i32;
+            let world_y = chunk_base_y + y as i32;
+            let upper_block = block_at(world, generator, world_x, world_y, z_wall);
+
+            if is_solid(upper_block) {
+                let source_color = palette.color_for(upper_block);
+                let base_color = wall_base_tint(source_color);
+                let edge_color = wall_edge_tint(source_color);
+                let mask = wall_edge_mask(world, generator, world_x, world_y, z_wall);
+                draw_wall_overlay(&mut image, x, y, base_color, edge_color, mask);
+            }
         }
     }
 
@@ -422,6 +448,121 @@ fn div_floor(a: i32, b: i32) -> i32 {
         d - 1
     } else {
         d
+    }
+}
+
+fn chunk_and_local_for_world_coord(coord: WorldCoord) -> (ChunkPosition, LocalBlockCoord) {
+    let chunk_x = div_floor(coord.x, CHUNK_WIDTH as i32);
+    let chunk_y = div_floor(coord.y, CHUNK_DEPTH as i32);
+    let chunk_z = div_floor(coord.z, CHUNK_HEIGHT as i32);
+
+    let local_x = (coord.x - chunk_x * CHUNK_WIDTH as i32) as usize;
+    let local_y = (coord.y - chunk_y * CHUNK_DEPTH as i32) as usize;
+    let local_z = (coord.z - chunk_z * CHUNK_HEIGHT as i32) as usize;
+
+    (
+        ChunkPosition::new(chunk_x, chunk_y, chunk_z),
+        LocalBlockCoord::new(local_x, local_y, local_z),
+    )
+}
+
+fn block_at(world: &World, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> BlockId {
+    let coord = WorldCoord::new(x, y, z);
+    let (chunk_position, local) = chunk_and_local_for_world_coord(coord);
+
+    if let Some(chunk) = world.chunk(&chunk_position) {
+        return chunk
+            .get_block(local)
+            .unwrap_or_else(|_| generator.block_at(coord));
+    }
+
+    generator.block_at(coord)
+}
+
+fn is_solid(block: BlockId) -> bool {
+    block != AIR
+}
+
+fn wall_edge_mask(world: &World, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> u8 {
+    let mut mask = 0u8;
+
+    if !is_solid(block_at(world, generator, x, y - 1, z)) {
+        mask |= MASK_NORTH;
+    }
+    if !is_solid(block_at(world, generator, x + 1, y, z)) {
+        mask |= MASK_EAST;
+    }
+    if !is_solid(block_at(world, generator, x, y + 1, z)) {
+        mask |= MASK_SOUTH;
+    }
+    if !is_solid(block_at(world, generator, x - 1, y, z)) {
+        mask |= MASK_WEST;
+    }
+
+    mask
+}
+
+fn apply_saturation_and_brightness(color: Color, saturation: f32, brightness: f32) -> Color {
+    let intensity = (color.r + color.g + color.b) / 3.0;
+    let adjust = |channel: f32| -> f32 {
+        let saturated = intensity + (channel - intensity) * saturation;
+        (saturated * brightness).clamp(0.0, 1.0)
+    };
+
+    Color {
+        r: adjust(color.r),
+        g: adjust(color.g),
+        b: adjust(color.b),
+        a: color.a,
+    }
+}
+
+fn wall_base_tint(color: Color) -> Color {
+    apply_saturation_and_brightness(color, 1.25, 0.2)
+}
+
+fn wall_edge_tint(color: Color) -> Color {
+    apply_saturation_and_brightness(color, 1.2, 1.15)
+}
+
+fn draw_wall_overlay(
+    image: &mut Image,
+    block_x: usize,
+    block_y: usize,
+    base_color: Color,
+    edge_color: Color,
+    mask: u8,
+) {
+    fill_block(image, block_x, block_y, base_color);
+
+    let size = BLOCK_PIXEL_SIZE as u32;
+    let start_x = block_x as u32 * size;
+    let start_y = block_y as u32 * size;
+
+    if mask & MASK_NORTH != 0 {
+        for dx in 0..size {
+            image.set_pixel(start_x + dx, start_y, edge_color);
+        }
+    }
+
+    if mask & MASK_EAST != 0 {
+        let x = start_x + size - 1;
+        for dy in 0..size {
+            image.set_pixel(x, start_y + dy, edge_color);
+        }
+    }
+
+    if mask & MASK_SOUTH != 0 {
+        let y = start_y + size - 1;
+        for dx in 0..size {
+            image.set_pixel(start_x + dx, y, edge_color);
+        }
+    }
+
+    if mask & MASK_WEST != 0 {
+        for dy in 0..size {
+            image.set_pixel(start_x, start_y + dy, edge_color);
+        }
     }
 }
 
