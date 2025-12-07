@@ -274,8 +274,9 @@ impl GameState {
         }
 
         let power_delta = wheel_y.signum() as i32;
-        let screen_center = vec2(screen_width() / 2.0, screen_height() / 2.0);
-        self.apply_zoom_power_at_screen_pos(self.zoom_power + power_delta, screen_center);
+        let (mouse_x, mouse_y) = mouse_position();
+        let focus = vec2(mouse_x, mouse_y);
+        self.apply_zoom_power_at_screen_pos(self.zoom_power + power_delta, focus);
     }
 
     fn handle_pinch_zoom(&mut self) {
