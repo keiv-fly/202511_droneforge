@@ -33,26 +33,23 @@ impl DeterministicMap {
             return BEDROCK;
         }
 
-        if coord.z > 0 {
-            if coord.x > 0 && coord.y == coord.z {
-                return STONE;
-            }
-            return AIR;
-        }
-
-        if coord.x < 0 {
+        if coord.x <= 0 {
             if coord.z == 0 && (-5..=0).contains(&coord.x) {
                 return DIRT;
             }
 
             if (-64..=-5).contains(&coord.z) {
+                let mut rng = self.rng_for_coord(coord);
+                if rng.u32(0..100) < 5 {
+                    return IRON;
+                }
                 return STONE;
             }
 
             return AIR;
         }
 
-        if coord.x > 0 && (-64..=0).contains(&coord.z) {
+        if coord.x + coord.z > 0 && (-64..=0).contains(&coord.z) {
             let mut rng = self.rng_for_coord(coord);
             if rng.u32(0..100) < 5 {
                 return IRON;
