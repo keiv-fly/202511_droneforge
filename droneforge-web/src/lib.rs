@@ -82,6 +82,8 @@ pub struct GameState {
     camera_initialized: bool,
     last_pinch_distance: Option<f32>,
     pinch_zoom_accumulator: f32,
+    last_two_finger_center: Option<Vec2>,
+    last_right_drag_pos: Option<Vec2>,
 }
 
 impl GameState {
@@ -100,6 +102,8 @@ impl GameState {
             camera_initialized: false,
             last_pinch_distance: None,
             pinch_zoom_accumulator: 0.0,
+            last_two_finger_center: None,
+            last_right_drag_pos: None,
         };
 
         game.rebuild_chunk_textures();
@@ -288,6 +292,7 @@ impl GameState {
         if active_touches.len() < 2 {
             self.last_pinch_distance = None;
             self.pinch_zoom_accumulator = 0.0;
+            self.last_two_finger_center = None;
             return;
         }
 
@@ -299,6 +304,14 @@ impl GameState {
         }
 
         let focus = (first.position + second.position) / 2.0;
+
+        // Two-finger pan: shift camera by the movement of the pinch center.
+        if let Some(previous_center) = self.last_two_finger_center {
+            let delta = focus - previous_center;
+            self.camera_offset_x += delta.x;
+            self.camera_offset_y += delta.y;
+        }
+        self.last_two_finger_center = Some(focus);
 
         if let Some(previous_distance) = self.last_pinch_distance {
             if previous_distance > 0.0 {
@@ -331,6 +344,23 @@ impl GameState {
         }
 
         self.last_pinch_distance = Some(current_distance);
+    }
+
+    fn handle_right_mouse_drag(&mut self) {
+        let is_dragging = is_mouse_button_down(MouseButton::Right);
+        let (mouse_x, mouse_y) = mouse_position();
+        let current = vec2(mouse_x, mouse_y);
+
+        if is_dragging {
+            if let Some(last) = self.last_right_drag_pos {
+                let delta = current - last;
+                self.camera_offset_x += delta.x;
+                self.camera_offset_y += delta.y;
+            }
+            self.last_right_drag_pos = Some(current);
+        } else {
+            self.last_right_drag_pos = None;
+        }
     }
 }
 
@@ -415,6 +445,7 @@ pub async fn run() {
 
         game.handle_mouse_wheel_zoom();
         game.handle_pinch_zoom();
+        game.handle_right_mouse_drag();
 
         game.render();
 
