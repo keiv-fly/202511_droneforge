@@ -21,7 +21,7 @@ const MIN_ZOOM_POWER: i32 = -48;
 const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
 
-const RENDER_CHUNK_SIZE: i32 = 64;
+const RENDER_CHUNK_SIZE: i32 = 32;
 const PRELOAD_Z_RADIUS: i32 = 5;
 const CHUNKS_PER_FRAME: usize = 1;
 const LOAD_METRIC_INTERVAL_SECS: f64 = 5.0;
@@ -85,12 +85,79 @@ impl BlockPalette {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct WallTileKey {
+    block: BlockId,
+    mask: u8,
+}
+
+struct TileSet {
+    floor_tiles: HashMap<BlockId, Image>,
+    wall_tiles: HashMap<WallTileKey, Image>,
+}
+
+impl TileSet {
+    fn new(palette: &BlockPalette) -> Self {
+        let mut floor_tiles = HashMap::new();
+        let mut wall_tiles = HashMap::new();
+
+        let solid_blocks: &[BlockId] = &[
+            droneforge_core::DIRT,
+            droneforge_core::STONE,
+            droneforge_core::IRON,
+            BEDROCK,
+        ];
+
+        for &block in solid_blocks {
+            let mut img = Image::gen_image_color(
+                BLOCK_PIXEL_SIZE.into(),
+                BLOCK_PIXEL_SIZE.into(),
+                Color::from_rgba(0, 0, 0, 0),
+            );
+            fill_block(&mut img, 0, 0, palette.color_for(block));
+            floor_tiles.insert(block, img);
+        }
+
+        for &block in solid_blocks {
+            let source_color = palette.color_for(block);
+            let base_color = wall_base_tint(source_color);
+            let edge_color = wall_edge_tint(source_color);
+
+            for mask in 0u8..16 {
+                let mut img = Image::gen_image_color(
+                    BLOCK_PIXEL_SIZE.into(),
+                    BLOCK_PIXEL_SIZE.into(),
+                    Color::from_rgba(0, 0, 0, 0),
+                );
+                draw_wall_overlay(&mut img, 0, 0, base_color, edge_color, mask);
+                draw_wall_outline(&mut img, 0, 0, mask);
+                wall_tiles.insert(WallTileKey { block, mask }, img);
+            }
+        }
+
+        Self {
+            floor_tiles,
+            wall_tiles,
+        }
+    }
+
+    fn floor_image(&self, block: BlockId) -> Option<&Image> {
+        self.floor_tiles.get(&block)
+    }
+
+    fn wall_image(&self, block: BlockId, mask: u8) -> Option<&Image> {
+        self.wall_tiles.get(&WallTileKey { block, mask })
+    }
+}
+
 pub struct GameState {
     world: World,
     render_cache: HashMap<RenderChunkKey, Texture2D>,
     load_queue: VecDeque<RenderChunkKey>,
     queued_keys: HashSet<RenderChunkKey>,
     generator: DeterministicMap,
+    tiles: TileSet,
+    scratch_image: Image,
     view_z: i32,
     zoom: f32,
     zoom_power: i32,
@@ -113,14 +180,21 @@ impl GameState {
     pub fn new() -> Self {
         let generator = DeterministicMap::new(42);
         let initial_zoom_power = 0;
+        let palette = BlockPalette;
         let (render_chunk_xs, render_chunk_ys) =
             render_chunk_ranges(VIEW_MIN_X, VIEW_MAX_X, VIEW_MIN_Y, VIEW_MAX_Y);
+        let (chunk_width_px, chunk_depth_px) = render_chunk_pixel_dimensions();
+        let scratch_image =
+            Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
+        let tiles = TileSet::new(&palette);
         let mut game = Self {
             world: World::new(),
             render_cache: HashMap::new(),
             load_queue: VecDeque::new(),
             queued_keys: HashSet::new(),
             generator,
+            tiles,
+            scratch_image,
             view_z: DEFAULT_VIEW_Z,
             zoom: zoom_scale_from_power(initial_zoom_power),
             zoom_power: initial_zoom_power,
@@ -165,7 +239,6 @@ impl GameState {
     }
 
     fn cache_level_now(&mut self, z: i32) {
-        let palette = BlockPalette;
         let keys: Vec<RenderChunkKey> = self
             .render_chunk_ys
             .iter()
@@ -182,7 +255,7 @@ impl GameState {
                 continue;
             }
 
-            let (texture, duration_ms) = self.build_render_chunk_texture(key, &palette);
+            let (texture, duration_ms) = self.build_render_chunk_texture(key);
             self.render_cache.insert(key, texture);
             self.record_load_time(duration_ms);
             self.queued_keys.remove(&key);
@@ -230,7 +303,6 @@ impl GameState {
     }
 
     fn process_load_queue(&mut self) {
-        let palette = BlockPalette;
         for _ in 0..CHUNKS_PER_FRAME {
             if let Some(key) = self.load_queue.pop_front() {
                 self.queued_keys.remove(&key);
@@ -238,7 +310,7 @@ impl GameState {
                     continue;
                 }
 
-                let (texture, duration_ms) = self.build_render_chunk_texture(key, &palette);
+                let (texture, duration_ms) = self.build_render_chunk_texture(key);
                 self.render_cache.insert(key, texture);
                 self.record_load_time(duration_ms);
             } else {
@@ -269,46 +341,51 @@ impl GameState {
         }
     }
 
-    fn build_render_chunk_texture(
-        &mut self,
-        key: RenderChunkKey,
-        palette: &BlockPalette,
-    ) -> (Texture2D, f64) {
+    fn build_render_chunk_texture(&mut self, key: RenderChunkKey) -> (Texture2D, f64) {
         let start_secs = get_time();
+        let palette = BlockPalette;
         self.register_chunks_for_render(key);
-
-        let chunk_width_px = RENDER_CHUNK_SIZE as u16 * BLOCK_PIXEL_SIZE;
-        let chunk_depth_px = RENDER_CHUNK_SIZE as u16 * BLOCK_PIXEL_SIZE;
-        let mut image =
-            Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
 
         let base_x = key.chunk_x * RENDER_CHUNK_SIZE;
         let base_y = key.chunk_y * RENDER_CHUNK_SIZE;
         let z_wall = key.z + 1;
+
+        let (chunk_w_px, chunk_h_px) = render_chunk_pixel_dimensions();
+        self.scratch_image = Image::gen_image_color(
+            chunk_w_px,
+            chunk_h_px,
+            Color::from_rgba(0, 0, 0, 0),
+        );
 
         for y in 0..RENDER_CHUNK_SIZE as usize {
             for x in 0..RENDER_CHUNK_SIZE as usize {
                 let world_x = base_x + x as i32;
                 let world_y = base_y + y as i32;
                 let block = block_at(&self.world, &self.generator, world_x, world_y, key.z);
-                let color = palette.color_for(block);
-                fill_block(&mut image, x, y, color);
-
                 let upper_block = block_at(&self.world, &self.generator, world_x, world_y, z_wall);
 
                 if is_solid(upper_block) {
-                    let source_color = palette.color_for(upper_block);
-                    let base_color = wall_base_tint(source_color);
-                    let edge_color = wall_edge_tint(source_color);
                     let mask =
                         wall_edge_mask(&self.world, &self.generator, world_x, world_y, z_wall);
-                    draw_wall_overlay(&mut image, x, y, base_color, edge_color, mask);
-                    draw_wall_outline(&mut image, x, y, mask);
+
+                    if let Some(tile) = self.tiles.wall_image(upper_block, mask) {
+                        blit_tile(&mut self.scratch_image, tile, x, y);
+                    } else if let Some(tile) = self.tiles.floor_image(block) {
+                        blit_tile(&mut self.scratch_image, tile, x, y);
+                    } else {
+                        let color = palette.color_for(block);
+                        fill_block(&mut self.scratch_image, x, y, color);
+                    }
+                } else if let Some(tile) = self.tiles.floor_image(block) {
+                    blit_tile(&mut self.scratch_image, tile, x, y);
+                } else {
+                    let color = palette.color_for(block);
+                    fill_block(&mut self.scratch_image, x, y, color);
                 }
             }
         }
 
-        let texture = Texture2D::from_image(&image);
+        let texture = Texture2D::from_image(&self.scratch_image);
         texture.set_filter(FilterMode::Nearest);
         let duration_ms = (get_time() - start_secs) * 1000.0;
         (texture, duration_ms)
@@ -589,6 +666,19 @@ fn fill_block(image: &mut Image, block_x: usize, block_y: usize, color: Color) {
     }
 }
 
+fn blit_tile(dst: &mut Image, tile: &Image, tile_x: usize, tile_y: usize) {
+    let size = BLOCK_PIXEL_SIZE as u32;
+    let dst_x0 = tile_x as u32 * size;
+    let dst_y0 = tile_y as u32 * size;
+
+    for dy in 0..size {
+        for dx in 0..size {
+            let color = tile.get_pixel(dx, dy);
+            dst.set_pixel(dst_x0 + dx, dst_y0 + dy, color);
+        }
+    }
+}
+
 fn fill_rect(
     image: &mut Image,
     start_x: u32,
@@ -617,6 +707,11 @@ fn render_chunk_ranges(
     let xs: Vec<i32> = chunk_range(min_x, max_x, RENDER_CHUNK_SIZE).collect();
     let ys: Vec<i32> = chunk_range(min_y, max_y, RENDER_CHUNK_SIZE).collect();
     (xs, ys)
+}
+
+fn render_chunk_pixel_dimensions() -> (u16, u16) {
+    let chunk_size_px = RENDER_CHUNK_SIZE as u16 * BLOCK_PIXEL_SIZE;
+    (chunk_size_px, chunk_size_px)
 }
 
 fn div_floor(a: i32, b: i32) -> i32 {
