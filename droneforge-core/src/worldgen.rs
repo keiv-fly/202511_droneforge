@@ -7,8 +7,8 @@ use crate::block::{AIR, BEDROCK, BlockId, DIRT, IRON, STONE};
 use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk};
 use crate::coordinates::{ChunkPosition, LocalBlockCoord, WorldCoord};
 
-const HORIZONTAL_LIMIT: i32 = 1024;
-const VERTICAL_LIMIT: i32 = 65;
+pub const HORIZONTAL_LIMIT: i32 = 1024;
+pub const VERTICAL_LIMIT: i32 = 65;
 
 #[derive(Debug, Clone)]
 pub struct DeterministicMap {
@@ -49,8 +49,9 @@ impl DeterministicMap {
             return AIR;
         }
 
-        if (coord.x > 0 && (-64..=0).contains(&coord.z))||
-        (coord.x - coord.z + 1 > 0 && coord.z > 0) {
+        if (coord.x > 0 && (-64..=0).contains(&coord.z))
+            || (coord.x - coord.z + 1 > 0 && coord.z > 0)
+        {
             let mut rng = self.rng_for_coord(coord);
             if rng.u32(0..100) < 5 {
                 return IRON;
@@ -63,6 +64,12 @@ impl DeterministicMap {
 
     pub fn chunk_for_position(&self, position: ChunkPosition) -> Chunk {
         let mut chunk = Chunk::new(position, AIR);
+        self.populate_chunk(&mut chunk, position);
+        chunk
+    }
+
+    pub fn populate_chunk(&self, chunk: &mut Chunk, position: ChunkPosition) {
+        chunk.position = position;
         let base_x = position.x * CHUNK_WIDTH as i32;
         let base_y = position.y * CHUNK_DEPTH as i32;
         let base_z = position.z * CHUNK_HEIGHT as i32;
@@ -81,8 +88,6 @@ impl DeterministicMap {
                 }
             }
         }
-
-        chunk
     }
 
     fn rng_for_coord(&self, coord: WorldCoord) -> Rng {

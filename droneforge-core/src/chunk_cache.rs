@@ -1,0 +1,276 @@
+use crate::block::{AIR, BlockId};
+use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkError};
+use crate::coordinates::{ChunkPosition, LocalBlockCoord, WorldCoord};
+use crate::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct CachedChunk {
+    pub position: ChunkPosition,
+    pub palette: Vec<BlockId>,
+    blocks: Vec<u64>,
+    bits_per_index: u8,
+}
+
+impl CachedChunk {
+    pub fn from_chunk(chunk: &Chunk) -> Self {
+        let (palette, palette_indices) = build_palette(chunk.blocks());
+        let bits_per_index = bits_required(palette.len());
+        let blocks = pack_blocks(chunk.blocks(), &palette_indices, bits_per_index);
+
+        Self {
+            position: chunk.position,
+            palette,
+            blocks,
+            bits_per_index,
+        }
+    }
+
+    pub fn get_block(&self, coord: LocalBlockCoord) -> Result<BlockId, ChunkError> {
+        if self.palette.is_empty() {
+            return Err(ChunkError::InvalidBlockCount(0));
+        }
+
+        let index = Chunk::block_index(coord)?;
+        if self.bits_per_index == 0 {
+            return Ok(self.palette[0]);
+        }
+
+        let palette_index = unpack_index(&self.blocks, index, self.bits_per_index);
+        self.palette
+            .get(palette_index as usize)
+            .copied()
+            .ok_or(ChunkError::InvalidBlockCount(palette_index as usize))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ChunkCache {
+    chunks: HashMap<ChunkPosition, CachedChunk>,
+    reusable_chunk: Chunk,
+}
+
+impl ChunkCache {
+    pub fn new() -> Self {
+        Self {
+            chunks: HashMap::new(),
+            reusable_chunk: Chunk::new(ChunkPosition::new(0, 0, 0), AIR),
+        }
+    }
+
+    pub fn from_generator_with_limits(generator: &DeterministicMap) -> Self {
+        let mut cache = Self::new();
+        cache.populate_within_limits(generator, HORIZONTAL_LIMIT, VERTICAL_LIMIT);
+        cache
+    }
+
+    pub fn populate_within_limits(
+        &mut self,
+        generator: &DeterministicMap,
+        horizontal_limit: i32,
+        vertical_limit: i32,
+    ) {
+        let min_chunk_x = div_floor(-horizontal_limit, CHUNK_WIDTH as i32);
+        let max_chunk_x = div_floor(horizontal_limit, CHUNK_WIDTH as i32);
+        let min_chunk_y = div_floor(-horizontal_limit, CHUNK_DEPTH as i32);
+        let max_chunk_y = div_floor(horizontal_limit, CHUNK_DEPTH as i32);
+        let min_chunk_z = div_floor(-vertical_limit, CHUNK_HEIGHT as i32);
+        let max_chunk_z = div_floor(vertical_limit, CHUNK_HEIGHT as i32);
+
+        for chunk_x in min_chunk_x..=max_chunk_x {
+            for chunk_y in min_chunk_y..=max_chunk_y {
+                for chunk_z in min_chunk_z..=max_chunk_z {
+                    let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
+                    generator.populate_chunk(&mut self.reusable_chunk, position);
+                    let cached = CachedChunk::from_chunk(&self.reusable_chunk);
+                    self.chunks.insert(position, cached);
+                }
+            }
+        }
+    }
+
+    pub fn chunk(&self, position: &ChunkPosition) -> Option<&CachedChunk> {
+        self.chunks.get(position)
+    }
+
+    pub fn block_at_world(&self, coord: WorldCoord) -> Option<BlockId> {
+        let (chunk_pos, local) = chunk_and_local_for_world_coord(coord);
+        self.chunk(&chunk_pos)
+            .and_then(|chunk| chunk.get_block(local).ok())
+    }
+
+    pub fn len(&self) -> usize {
+        self.chunks.len()
+    }
+}
+
+impl Default for ChunkCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn build_palette(blocks: &[BlockId]) -> (Vec<BlockId>, HashMap<BlockId, usize>) {
+    let mut palette = Vec::new();
+    let mut indices = HashMap::new();
+
+    for &block in blocks {
+        if !indices.contains_key(&block) {
+            let idx = palette.len();
+            palette.push(block);
+            indices.insert(block, idx);
+        }
+    }
+
+    (palette, indices)
+}
+
+fn bits_required(palette_len: usize) -> u8 {
+    if palette_len <= 1 {
+        0
+    } else {
+        (usize::BITS - (palette_len.saturating_sub(1)).leading_zeros()) as u8
+    }
+}
+
+fn pack_blocks(
+    blocks: &[BlockId],
+    palette_indices: &HashMap<BlockId, usize>,
+    bits_per_index: u8,
+) -> Vec<u64> {
+    if bits_per_index == 0 {
+        return Vec::new();
+    }
+
+    let total_bits = blocks.len() * bits_per_index as usize;
+    let u64_len = (total_bits + 63) / 64;
+    let mut packed = vec![0u64; u64_len];
+    let mask: u64 = (1u64 << bits_per_index) - 1;
+
+    for (i, block) in blocks.iter().enumerate() {
+        let palette_index = *palette_indices
+            .get(block)
+            .expect("palette must contain block");
+        let offset = i * bits_per_index as usize;
+        let word_index = offset / 64;
+        let bit_in_word = offset % 64;
+        let value = (palette_index as u64) & mask;
+
+        packed[word_index] |= value << bit_in_word;
+        let bits_written = bit_in_word + bits_per_index as usize;
+        if bits_written > 64 {
+            let spill_bits = bits_written - 64;
+            packed[word_index + 1] |= value >> (bits_per_index as usize - spill_bits);
+        }
+    }
+
+    packed
+}
+
+fn unpack_index(packed: &[u64], block_index: usize, bits_per_index: u8) -> u64 {
+    let offset = block_index * bits_per_index as usize;
+    let word_index = offset / 64;
+    let bit_in_word = offset % 64;
+    let mask = (1u64 << bits_per_index) - 1;
+
+    let mut value = (packed[word_index] >> bit_in_word) & mask;
+    let bits_read = bit_in_word + bits_per_index as usize;
+    if bits_read > 64 {
+        let spill_bits = bits_read - 64;
+        let spill_mask = (1u64 << spill_bits) - 1;
+        let spill = packed[word_index + 1] & spill_mask;
+        value |= spill << (bits_per_index as usize - spill_bits);
+    }
+
+    value
+}
+
+fn chunk_and_local_for_world_coord(coord: WorldCoord) -> (ChunkPosition, LocalBlockCoord) {
+    let chunk_x = div_floor(coord.x, CHUNK_WIDTH as i32);
+    let chunk_y = div_floor(coord.y, CHUNK_DEPTH as i32);
+    let chunk_z = div_floor(coord.z, CHUNK_HEIGHT as i32);
+
+    let local_x = (coord.x - chunk_x * CHUNK_WIDTH as i32) as usize;
+    let local_y = (coord.y - chunk_y * CHUNK_DEPTH as i32) as usize;
+    let local_z = (coord.z - chunk_z * CHUNK_HEIGHT as i32) as usize;
+
+    (
+        ChunkPosition::new(chunk_x, chunk_y, chunk_z),
+        LocalBlockCoord::new(local_x, local_y, local_z),
+    )
+}
+
+fn div_floor(a: i32, b: i32) -> i32 {
+    let (d, r) = (a / b, a % b);
+    if r != 0 && ((r < 0) != (b < 0)) {
+        d - 1
+    } else {
+        d
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::block::{AIR, BEDROCK, DIRT, IRON, STONE};
+
+    fn coord_for_index(index: usize) -> LocalBlockCoord {
+        let z = index / (CHUNK_WIDTH * CHUNK_DEPTH);
+        let remainder = index % (CHUNK_WIDTH * CHUNK_DEPTH);
+        let y = remainder / CHUNK_WIDTH;
+        let x = remainder % CHUNK_WIDTH;
+        LocalBlockCoord::new(x, y, z)
+    }
+
+    #[test]
+    fn single_palette_uses_no_storage() {
+        let position = ChunkPosition::new(0, 0, 0);
+        let chunk = Chunk::new(position, AIR);
+        let cached = CachedChunk::from_chunk(&chunk);
+
+        assert_eq!(cached.palette, vec![AIR]);
+        assert!(cached.blocks.is_empty());
+        assert_eq!(
+            cached
+                .get_block(LocalBlockCoord::new(0, 0, 0))
+                .expect("block should exist"),
+            AIR
+        );
+    }
+
+    #[test]
+    fn retrieves_blocks_across_word_boundaries() {
+        let position = ChunkPosition::new(1, 0, 0);
+        let mut chunk = Chunk::new(position, AIR);
+
+        let palette_values: [BlockId; 5] = [AIR, DIRT, STONE, IRON, BEDROCK];
+        for (i, &block) in palette_values.iter().enumerate() {
+            let coord = coord_for_index(i);
+            chunk.set_block(coord, block).unwrap();
+        }
+
+        let boundary_index = 22;
+        let boundary_coord = coord_for_index(boundary_index);
+        chunk.set_block(boundary_coord, BEDROCK).unwrap();
+
+        let cached = CachedChunk::from_chunk(&chunk);
+        assert!(cached.palette.len() >= palette_values.len());
+
+        for (i, &block) in palette_values.iter().enumerate() {
+            let coord = coord_for_index(i);
+            assert_eq!(cached.get_block(coord).unwrap(), block);
+        }
+        assert_eq!(cached.get_block(boundary_coord).unwrap(), BEDROCK);
+    }
+
+    #[test]
+    fn cache_serves_world_coordinates() {
+        let generator = DeterministicMap::new(7);
+        let mut cache = ChunkCache::new();
+        cache.populate_within_limits(&generator, CHUNK_WIDTH as i32, CHUNK_HEIGHT as i32);
+
+        let coord = WorldCoord::new(0, 0, 0);
+        let expected = generator.block_at(coord);
+        assert_eq!(cache.block_at_world(coord), Some(expected));
+    }
+}

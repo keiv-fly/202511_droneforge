@@ -67,6 +67,10 @@ impl Chunk {
         }
     }
 
+    pub fn blocks(&self) -> &[BlockId] {
+        &self.blocks
+    }
+
     pub fn apply_block_save(&mut self, data: &ChunkBlocks) -> Result<(), ChunkError> {
         if data.blocks.len() != CHUNK_BLOCKS {
             return Err(ChunkError::InvalidBlockCount(data.blocks.len()));

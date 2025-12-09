@@ -1,10 +1,8 @@
 use droneforge_core::worldgen::DeterministicMap;
-use droneforge_core::{
-    AIR, BEDROCK, BlockId, CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, ChunkPosition, LocalBlockCoord,
-    World, WorldCoord,
-};
-use macroquad::prelude::*;
+use droneforge_core::{AIR, BEDROCK, BlockId, ChunkCache, World, WorldCoord};
+#[cfg(target_arch = "wasm32")]
 use macroquad::miniquad;
+use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -152,6 +150,7 @@ impl TileSet {
 
 pub struct GameState {
     world: World,
+    chunk_cache: ChunkCache,
     render_cache: HashMap<RenderChunkKey, Texture2D>,
     load_queue: VecDeque<RenderChunkKey>,
     queued_keys: HashSet<RenderChunkKey>,
@@ -174,11 +173,16 @@ pub struct GameState {
     load_time_count: u64,
     last_avg_update_time: f64,
     last_reported_avg_ms: f64,
+    initial_chunk_cache_ms: f64,
+    initial_render_cache_ms: f64,
 }
 
 impl GameState {
     pub fn new() -> Self {
         let generator = DeterministicMap::new(42);
+        let chunk_cache_start = get_time();
+        let chunk_cache = ChunkCache::from_generator_with_limits(&generator);
+        let initial_chunk_cache_ms = (get_time() - chunk_cache_start) * 1000.0;
         let initial_zoom_power = 0;
         let palette = BlockPalette;
         let (render_chunk_xs, render_chunk_ys) =
@@ -189,6 +193,7 @@ impl GameState {
         let tiles = TileSet::new(&palette);
         let mut game = Self {
             world: World::new(),
+            chunk_cache,
             render_cache: HashMap::new(),
             load_queue: VecDeque::new(),
             queued_keys: HashSet::new(),
@@ -211,9 +216,14 @@ impl GameState {
             load_time_count: 0,
             last_avg_update_time: 0.0,
             last_reported_avg_ms: 0.0,
+            initial_chunk_cache_ms,
+            initial_render_cache_ms: 0.0,
         };
 
-        game.cache_level_now(DEFAULT_VIEW_Z);
+        let render_cache_start = get_time();
+        game.cache_levels_range_now(DEFAULT_VIEW_Z, PRELOAD_Z_RADIUS);
+        game.initial_render_cache_ms = (get_time() - render_cache_start) * 1000.0;
+
         game.enqueue_surrounding_levels(DEFAULT_VIEW_Z);
         game.last_reported_avg_ms = game.average_load_time_ms();
         game.last_avg_update_time = get_time();
@@ -225,15 +235,17 @@ impl GameState {
             let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
             let screen_center_x = screen_width() / 2.0;
             let screen_center_y = screen_height() / 2.0;
-            
+
             // Set camera offset so world (0, 0) is at screen center
             // screen_x = (world_x - VIEW_MIN_X) * effective_block_size + camera_offset_x
             // For world (0, 0) at screen center:
             // screen_center_x = (0 - VIEW_MIN_X) * effective_block_size + camera_offset_x
             // camera_offset_x = screen_center_x - (0 - VIEW_MIN_X) * effective_block_size
-            self.camera_offset_x = screen_center_x - (0.0 - VIEW_MIN_X as f32) * effective_block_size;
-            self.camera_offset_y = screen_center_y - (0.0 - VIEW_MIN_Y as f32) * effective_block_size;
-            
+            self.camera_offset_x =
+                screen_center_x - (0.0 - VIEW_MIN_X as f32) * effective_block_size;
+            self.camera_offset_y =
+                screen_center_y - (0.0 - VIEW_MIN_Y as f32) * effective_block_size;
+
             self.camera_initialized = true;
         }
     }
@@ -245,7 +257,11 @@ impl GameState {
             .flat_map(|&chunk_y| {
                 self.render_chunk_xs
                     .iter()
-                    .map(move |&chunk_x| RenderChunkKey { chunk_x, chunk_y, z })
+                    .map(move |&chunk_x| RenderChunkKey {
+                        chunk_x,
+                        chunk_y,
+                        z,
+                    })
             })
             .collect();
 
@@ -259,6 +275,13 @@ impl GameState {
             self.render_cache.insert(key, texture);
             self.record_load_time(duration_ms);
             self.queued_keys.remove(&key);
+        }
+    }
+
+    fn cache_levels_range_now(&mut self, center_z: i32, radius: i32) {
+        for dz in -radius..=radius {
+            let target_z = center_z.saturating_add(dz);
+            self.cache_level_now(target_z);
         }
     }
 
@@ -280,7 +303,11 @@ impl GameState {
             .flat_map(|&chunk_y| {
                 self.render_chunk_xs
                     .iter()
-                    .map(move |&chunk_x| RenderChunkKey { chunk_x, chunk_y, z })
+                    .map(move |&chunk_x| RenderChunkKey {
+                        chunk_x,
+                        chunk_y,
+                        z,
+                    })
             })
             .collect();
 
@@ -319,54 +346,34 @@ impl GameState {
         }
     }
 
-    fn register_chunks_for_render(&mut self, key: RenderChunkKey) {
-        let base_x = key.chunk_x * RENDER_CHUNK_SIZE;
-        let base_y = key.chunk_y * RENDER_CHUNK_SIZE;
-        let x_min = base_x;
-        let x_max = base_x + RENDER_CHUNK_SIZE - 1;
-        let y_min = base_y;
-        let y_max = base_y + RENDER_CHUNK_SIZE - 1;
-        let chunk_z = div_floor(key.z, CHUNK_HEIGHT as i32);
-        let upper_chunk_z = div_floor(key.z + 1, CHUNK_HEIGHT as i32);
-
-        for chunk_y in chunk_range(y_min, y_max, CHUNK_DEPTH as i32) {
-            for chunk_x in chunk_range(x_min, x_max, CHUNK_WIDTH as i32) {
-                let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
-                self.world
-                    .register_generated_chunk(position, &self.generator);
-                let upper_position = ChunkPosition::new(chunk_x, chunk_y, upper_chunk_z);
-                self.world
-                    .register_generated_chunk(upper_position, &self.generator);
-            }
-        }
-    }
-
     fn build_render_chunk_texture(&mut self, key: RenderChunkKey) -> (Texture2D, f64) {
         let start_secs = get_time();
         let palette = BlockPalette;
-        self.register_chunks_for_render(key);
 
         let base_x = key.chunk_x * RENDER_CHUNK_SIZE;
         let base_y = key.chunk_y * RENDER_CHUNK_SIZE;
         let z_wall = key.z + 1;
 
         let (chunk_w_px, chunk_h_px) = render_chunk_pixel_dimensions();
-        self.scratch_image = Image::gen_image_color(
-            chunk_w_px,
-            chunk_h_px,
-            Color::from_rgba(0, 0, 0, 0),
-        );
+        self.scratch_image =
+            Image::gen_image_color(chunk_w_px, chunk_h_px, Color::from_rgba(0, 0, 0, 0));
 
         for y in 0..RENDER_CHUNK_SIZE as usize {
             for x in 0..RENDER_CHUNK_SIZE as usize {
                 let world_x = base_x + x as i32;
                 let world_y = base_y + y as i32;
-                let block = block_at(&self.world, &self.generator, world_x, world_y, key.z);
-                let upper_block = block_at(&self.world, &self.generator, world_x, world_y, z_wall);
+                let block = block_at(&self.chunk_cache, &self.generator, world_x, world_y, key.z);
+                let upper_block =
+                    block_at(&self.chunk_cache, &self.generator, world_x, world_y, z_wall);
 
                 if is_solid(upper_block) {
-                    let mask =
-                        wall_edge_mask(&self.world, &self.generator, world_x, world_y, z_wall);
+                    let mask = wall_edge_mask(
+                        &self.chunk_cache,
+                        &self.generator,
+                        world_x,
+                        world_y,
+                        z_wall,
+                    );
 
                     if let Some(tile) = self.tiles.wall_image(upper_block, mask) {
                         blit_tile(&mut self.scratch_image, tile, x, y);
@@ -483,49 +490,78 @@ impl GameState {
             WHITE,
         );
 
-        let avg_text = if self.load_time_count == 0 {
-            "avg chunk load: --".to_string()
-        } else {
-            format!("avg chunk load: {:.2} ms", self.last_reported_avg_ms)
-        };
-        draw_text(&avg_text, 20.0, 64.0, 24.0, WHITE);
+        draw_text(
+            &format!("chunk cache: {:.2} ms", self.initial_chunk_cache_ms),
+            20.0,
+            64.0,
+            24.0,
+            WHITE,
+        );
 
         draw_text(
-            &format!("zoom power: {}", self.zoom_power),
+            &format!("render cache ±5: {:.2} ms", self.initial_render_cache_ms),
             20.0,
             88.0,
             24.0,
             WHITE,
         );
 
-        let (mouse_x, mouse_y) = mouse_position();
-        let tile_x = (((mouse_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
-        let tile_y = (((mouse_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
-        let tile_z = self.view_z;
+        let avg_text = if self.load_time_count == 0 {
+            "avg chunk load: --".to_string()
+        } else {
+            format!("avg chunk load: {:.2} ms", self.last_reported_avg_ms)
+        };
+        draw_text(&avg_text, 20.0, 112.0, 24.0, WHITE);
 
         draw_text(
-            &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
-            20.0,
-            112.0,
-            24.0,
-            WHITE,
-        );
-
-        let screen_center_x = screen_width() / 2.0;
-        let screen_center_y = screen_height() / 2.0;
-        let center_tile_x = (((screen_center_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
-        let center_tile_y = (((screen_center_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
-
-        draw_text(
-            &format!("center: {}, {}, {}", center_tile_x, center_tile_y, self.view_z),
+            &format!("zoom power: {}", self.zoom_power),
             20.0,
             136.0,
             24.0,
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 160.0, 24.0, WHITE);
-        draw_text(&format!("zoom: {:.2}x", normalized_zoom), 20.0, 184.0, 24.0, WHITE);
+        let (mouse_x, mouse_y) = mouse_position();
+        let tile_x =
+            (((mouse_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
+        let tile_y =
+            (((mouse_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
+        let tile_z = self.view_z;
+
+        draw_text(
+            &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
+            20.0,
+            160.0,
+            24.0,
+            WHITE,
+        );
+
+        let screen_center_x = screen_width() / 2.0;
+        let screen_center_y = screen_height() / 2.0;
+        let center_tile_x = (((screen_center_x - self.camera_offset_x) / effective_block_size)
+            + VIEW_MIN_X as f32) as i32;
+        let center_tile_y = (((screen_center_y - self.camera_offset_y) / effective_block_size)
+            + VIEW_MIN_Y as f32) as i32;
+
+        draw_text(
+            &format!(
+                "center: {}, {}, {}",
+                center_tile_x, center_tile_y, self.view_z
+            ),
+            20.0,
+            184.0,
+            24.0,
+            WHITE,
+        );
+
+        draw_text(&format!("z: {}", self.view_z), 20.0, 208.0, 24.0, WHITE);
+        draw_text(
+            &format!("zoom: {:.2}x", normalized_zoom),
+            20.0,
+            232.0,
+            24.0,
+            WHITE,
+        );
     }
 
     fn apply_zoom_power_at_screen_pos(&mut self, next_zoom_power: i32, focus_screen_pos: Vec2) {
@@ -654,7 +690,6 @@ impl Default for GameState {
     }
 }
 
-
 fn fill_block(image: &mut Image, block_x: usize, block_y: usize, color: Color) {
     let pixel_x = block_x as u32 * BLOCK_PIXEL_SIZE as u32;
     let pixel_y = block_y as u32 * BLOCK_PIXEL_SIZE as u32;
@@ -679,14 +714,7 @@ fn blit_tile(dst: &mut Image, tile: &Image, tile_x: usize, tile_y: usize) {
     }
 }
 
-fn fill_rect(
-    image: &mut Image,
-    start_x: u32,
-    start_y: u32,
-    width: u32,
-    height: u32,
-    color: Color,
-) {
+fn fill_rect(image: &mut Image, start_x: u32, start_y: u32, width: u32, height: u32, color: Color) {
     for dy in 0..height {
         for dx in 0..width {
             image.set_pixel(start_x + dx, start_y + dy, color);
@@ -698,12 +726,7 @@ fn chunk_range(min: i32, max: i32, chunk_size: i32) -> std::ops::RangeInclusive<
     div_floor(min, chunk_size)..=div_floor(max, chunk_size)
 }
 
-fn render_chunk_ranges(
-    min_x: i32,
-    max_x: i32,
-    min_y: i32,
-    max_y: i32,
-) -> (Vec<i32>, Vec<i32>) {
+fn render_chunk_ranges(min_x: i32, max_x: i32, min_y: i32, max_y: i32) -> (Vec<i32>, Vec<i32>) {
     let xs: Vec<i32> = chunk_range(min_x, max_x, RENDER_CHUNK_SIZE).collect();
     let ys: Vec<i32> = chunk_range(min_y, max_y, RENDER_CHUNK_SIZE).collect();
     (xs, ys)
@@ -723,51 +746,30 @@ fn div_floor(a: i32, b: i32) -> i32 {
     }
 }
 
-fn chunk_and_local_for_world_coord(coord: WorldCoord) -> (ChunkPosition, LocalBlockCoord) {
-    let chunk_x = div_floor(coord.x, CHUNK_WIDTH as i32);
-    let chunk_y = div_floor(coord.y, CHUNK_DEPTH as i32);
-    let chunk_z = div_floor(coord.z, CHUNK_HEIGHT as i32);
-
-    let local_x = (coord.x - chunk_x * CHUNK_WIDTH as i32) as usize;
-    let local_y = (coord.y - chunk_y * CHUNK_DEPTH as i32) as usize;
-    let local_z = (coord.z - chunk_z * CHUNK_HEIGHT as i32) as usize;
-
-    (
-        ChunkPosition::new(chunk_x, chunk_y, chunk_z),
-        LocalBlockCoord::new(local_x, local_y, local_z),
-    )
-}
-
-fn block_at(world: &World, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> BlockId {
+fn block_at(cache: &ChunkCache, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> BlockId {
     let coord = WorldCoord::new(x, y, z);
-    let (chunk_position, local) = chunk_and_local_for_world_coord(coord);
-
-    if let Some(chunk) = world.chunk(&chunk_position) {
-        return chunk
-            .get_block(local)
-            .unwrap_or_else(|_| generator.block_at(coord));
-    }
-
-    generator.block_at(coord)
+    cache
+        .block_at_world(coord)
+        .unwrap_or_else(|| generator.block_at(coord))
 }
 
 fn is_solid(block: BlockId) -> bool {
     block != AIR
 }
 
-fn wall_edge_mask(world: &World, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> u8 {
+fn wall_edge_mask(cache: &ChunkCache, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> u8 {
     let mut mask = 0u8;
 
-    if !is_solid(block_at(world, generator, x, y - 1, z)) {
+    if !is_solid(block_at(cache, generator, x, y - 1, z)) {
         mask |= MASK_NORTH;
     }
-    if !is_solid(block_at(world, generator, x + 1, y, z)) {
+    if !is_solid(block_at(cache, generator, x + 1, y, z)) {
         mask |= MASK_EAST;
     }
-    if !is_solid(block_at(world, generator, x, y + 1, z)) {
+    if !is_solid(block_at(cache, generator, x, y + 1, z)) {
         mask |= MASK_SOUTH;
     }
-    if !is_solid(block_at(world, generator, x - 1, y, z)) {
+    if !is_solid(block_at(cache, generator, x - 1, y, z)) {
         mask |= MASK_WEST;
     }
 
@@ -836,25 +838,11 @@ fn draw_wall_overlay(
     }
 
     if mask & MASK_EAST != 0 {
-        fill_rect(
-            image,
-            east_x,
-            start_y,
-            rim_thickness,
-            size,
-            edge_color,
-        );
+        fill_rect(image, east_x, start_y, rim_thickness, size, edge_color);
     }
 
     if mask & MASK_SOUTH != 0 {
-        fill_rect(
-            image,
-            start_x,
-            south_y,
-            size,
-            rim_thickness,
-            edge_color,
-        );
+        fill_rect(image, start_x, south_y, size, rim_thickness, edge_color);
     }
 
     if mask & MASK_WEST != 0 {
@@ -874,14 +862,7 @@ fn draw_wall_outline(image: &mut Image, block_x: usize, block_y: usize, mask: u8
     let start_y = block_y as u32 * size;
 
     if mask & MASK_NORTH != 0 {
-        fill_rect(
-            image,
-            start_x,
-            start_y,
-            size,
-            outline_thickness,
-            BLACK,
-        );
+        fill_rect(image, start_x, start_y, size, outline_thickness, BLACK);
     }
 
     if mask & MASK_EAST != 0 {
@@ -907,14 +888,7 @@ fn draw_wall_outline(image: &mut Image, block_x: usize, block_y: usize, mask: u8
     }
 
     if mask & MASK_WEST != 0 {
-        fill_rect(
-            image,
-            start_x,
-            start_y,
-            outline_thickness,
-            size,
-            BLACK,
-        );
+        fill_rect(image, start_x, start_y, outline_thickness, size, BLACK);
     }
 
     if mask & MASK_NORTH != 0 && mask & MASK_WEST != 0 {
@@ -999,12 +973,7 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let msg = info.to_string();
         if let Some(location) = info.location() {
-            miniquad::error!(
-                "panic at {}:{}: {}",
-                location.file(),
-                location.line(),
-                msg
-            );
+            miniquad::error!("panic at {}:{}: {}", location.file(), location.line(), msg);
         } else {
             miniquad::error!("panic: {}", msg);
         }
