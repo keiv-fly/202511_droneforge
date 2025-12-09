@@ -2,8 +2,8 @@ use crate::block::BlockId;
 use crate::coordinates::{ChunkPosition, LocalBlockCoord};
 use serde::{Deserialize, Serialize};
 
-pub const CHUNK_WIDTH: usize = 16;
-pub const CHUNK_DEPTH: usize = 16;
+pub const CHUNK_WIDTH: usize = 32;
+pub const CHUNK_DEPTH: usize = 32;
 pub const CHUNK_HEIGHT: usize = 4;
 const CHUNK_BLOCKS: usize = CHUNK_WIDTH * CHUNK_DEPTH * CHUNK_HEIGHT;
 
