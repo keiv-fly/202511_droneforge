@@ -1,10 +1,10 @@
-use droneforge_core::worldgen::DeterministicMap;
-use droneforge_core::{AIR, BEDROCK, BlockId, ChunkCache, World, WorldCoord};
+use droneforge_core::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
+use droneforge_core::{AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, World, WorldCoord};
 #[cfg(target_arch = "wasm32")]
 use macroquad::miniquad;
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 const VIEW_MIN_X: i32 = -100;
 const VIEW_MAX_X: i32 = 100;
@@ -22,9 +22,14 @@ const ZOOM_FACTOR: f32 = 1.1;
 const RENDER_CHUNK_SIZE: i32 = 32;
 const PRELOAD_Z_RADIUS: i32 = 5;
 const CHUNKS_PER_FRAME: usize = 1;
+const INITIAL_CACHE_CHUNKS_PER_FRAME: usize = 256;
 const LOAD_METRIC_INTERVAL_SECS: f64 = 5.0;
+const CHUNK_PROGRESS_STEP: u32 = 1_000;
 
 static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
+
+static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
+static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
 
 const MASK_NORTH: u8 = 1;
 const MASK_EAST: u8 = 2;
@@ -47,6 +52,38 @@ fn queue_z_delta(delta: i32) {
 
 fn take_pending_z_delta() -> i32 {
     PENDING_Z_DELTA.swap(0, Ordering::SeqCst)
+}
+
+fn reset_initial_chunk_progress(total_chunks: u32) {
+    INITIAL_CHUNK_TOTAL.store(total_chunks, Ordering::SeqCst);
+    INITIAL_CHUNK_LOADED.store(0, Ordering::SeqCst);
+}
+
+fn set_initial_chunk_loaded(loaded: u32) {
+    INITIAL_CHUNK_LOADED.store(loaded, Ordering::SeqCst);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn chunk_cache_progress_fraction() -> f32 {
+    let total = INITIAL_CHUNK_TOTAL.load(Ordering::SeqCst);
+    if total == 0 {
+        return 0.0;
+    }
+
+    let loaded = INITIAL_CHUNK_LOADED.load(Ordering::SeqCst).min(total);
+    loaded as f32 / total as f32
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn chunk_cache_loaded_chunks() -> u32 {
+    INITIAL_CHUNK_LOADED
+        .load(Ordering::SeqCst)
+        .min(INITIAL_CHUNK_TOTAL.load(Ordering::SeqCst))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn chunk_cache_total_chunks() -> u32 {
+    INITIAL_CHUNK_TOTAL.load(Ordering::SeqCst)
 }
 
 fn zoom_scale_from_power(power: i32) -> f32 {
@@ -183,6 +220,22 @@ impl GameState {
         let chunk_cache_start = get_time();
         let chunk_cache = ChunkCache::from_generator_with_limits(&generator);
         let initial_chunk_cache_ms = (get_time() - chunk_cache_start) * 1000.0;
+        Self::build(generator, chunk_cache, initial_chunk_cache_ms)
+    }
+
+    pub fn new_with_cache(
+        generator: DeterministicMap,
+        chunk_cache: ChunkCache,
+        initial_chunk_cache_ms: f64,
+    ) -> Self {
+        Self::build(generator, chunk_cache, initial_chunk_cache_ms)
+    }
+
+    fn build(
+        generator: DeterministicMap,
+        chunk_cache: ChunkCache,
+        initial_chunk_cache_ms: f64,
+    ) -> Self {
         let initial_zoom_power = 0;
         let palette = BlockPalette;
         let (render_chunk_xs, render_chunk_ys) =
@@ -947,9 +1000,51 @@ fn draw_wall_outline(image: &mut Image, block_x: usize, block_y: usize, mask: u8
     }
 }
 
+async fn build_chunk_cache_with_progress(generator: &DeterministicMap) -> (ChunkCache, f64) {
+    let build_start = get_time();
+    let (chunk_xs, chunk_ys, chunk_zs) =
+        ChunkCache::chunk_ranges_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT);
+    let total_chunks = (chunk_xs.len() * chunk_ys.len() * chunk_zs.len()) as u32;
+
+    reset_initial_chunk_progress(total_chunks);
+
+    let mut chunk_cache = ChunkCache::new();
+    let mut loaded_chunks: u32 = 0;
+    let mut next_progress_update = CHUNK_PROGRESS_STEP.min(total_chunks.max(1));
+    let mut batch_counter: usize = 0;
+
+    for &chunk_x in &chunk_xs {
+        for &chunk_y in &chunk_ys {
+            for &chunk_z in &chunk_zs {
+                let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
+                chunk_cache.populate_chunk_at(generator, position);
+                loaded_chunks = loaded_chunks.saturating_add(1);
+                batch_counter += 1;
+
+                if loaded_chunks >= next_progress_update || loaded_chunks == total_chunks {
+                    set_initial_chunk_loaded(loaded_chunks.min(total_chunks));
+                    next_progress_update = (loaded_chunks.saturating_add(CHUNK_PROGRESS_STEP))
+                        .min(total_chunks.max(1));
+                }
+
+                if batch_counter >= INITIAL_CACHE_CHUNKS_PER_FRAME {
+                    batch_counter = 0;
+                    next_frame().await;
+                }
+            }
+        }
+    }
+
+    set_initial_chunk_loaded(total_chunks);
+    let elapsed_ms = (get_time() - build_start) * 1000.0;
+    (chunk_cache, elapsed_ms)
+}
+
 pub async fn run() {
     install_panic_hook();
-    let mut game = GameState::new();
+    let generator = DeterministicMap::new(42);
+    let (chunk_cache, chunk_cache_ms) = build_chunk_cache_with_progress(&generator).await;
+    let mut game = GameState::new_with_cache(generator, chunk_cache, chunk_cache_ms);
     game.initialize_camera_center();
     let mut accumulator = 0.0_f32;
     let fixed_step = 1.0_f32 / 60.0_f32; // 60 Hz simulation

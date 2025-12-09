@@ -23,6 +23,55 @@ canvas#glcanvas {
   z-index: 2000;
 }
 
+.start-card {
+  background: #0f0f0f;
+  color: #f2f2f2;
+  padding: 24px 24px 20px;
+  border-radius: 16px;
+  width: min(420px, 90vw);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.loading-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.loading-status {
+  font-size: 0.95rem;
+  color: #b0b0b0;
+}
+
+.progress-track {
+  width: 100%;
+  height: 12px;
+  background: #1f1f1f;
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-track[role="progressbar"] {
+  outline: none;
+}
+
+.progress-fill {
+  position: absolute;
+  inset: 0;
+  width: 0;
+  background: linear-gradient(90deg, #3ec7ff, #7af3c4);
+  transition: width 0.2s ease;
+}
+
+.progress-detail {
+  font-size: 0.92rem;
+  color: #d8d8d8;
+  min-height: 1.3em;
+}
+
 #start-button {
   font-size: 1.25rem;
   padding: 1rem 2rem;
@@ -34,10 +83,21 @@ canvas#glcanvas {
   background: white;
   color: black;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
+  width: 100%;
 }
 
 #start-button:active {
   transform: scale(0.97);
+}
+
+#start-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.loading-error {
+  color: #ffb3b3;
+  font-size: 0.95rem;
 }
 
 .z-level-controls {

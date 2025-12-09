@@ -3,6 +3,7 @@ use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkError};
 use crate::coordinates::{ChunkPosition, LocalBlockCoord, WorldCoord};
 use crate::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
 use std::collections::HashMap;
+use std::ops::RangeInclusive;
 
 #[derive(Debug, Clone)]
 pub struct CachedChunk {
@@ -64,29 +65,89 @@ impl ChunkCache {
         cache
     }
 
+    pub fn from_generator_with_limits_with_progress(
+        generator: &DeterministicMap,
+        progress: &mut dyn FnMut(usize, usize),
+    ) -> Self {
+        let mut cache = Self::new();
+        cache.populate_within_limits_with_progress(
+            generator,
+            HORIZONTAL_LIMIT,
+            VERTICAL_LIMIT,
+            Some(progress),
+        );
+        cache
+    }
+
     pub fn populate_within_limits(
         &mut self,
         generator: &DeterministicMap,
         horizontal_limit: i32,
         vertical_limit: i32,
     ) {
-        let min_chunk_x = div_floor(-horizontal_limit, CHUNK_WIDTH as i32);
-        let max_chunk_x = div_floor(horizontal_limit, CHUNK_WIDTH as i32);
-        let min_chunk_y = div_floor(-horizontal_limit, CHUNK_DEPTH as i32);
-        let max_chunk_y = div_floor(horizontal_limit, CHUNK_DEPTH as i32);
-        let min_chunk_z = div_floor(-vertical_limit, CHUNK_HEIGHT as i32);
-        let max_chunk_z = div_floor(vertical_limit, CHUNK_HEIGHT as i32);
+        self.populate_within_limits_with_progress(
+            generator,
+            horizontal_limit,
+            vertical_limit,
+            None,
+        );
+    }
 
-        for chunk_x in min_chunk_x..=max_chunk_x {
-            for chunk_y in min_chunk_y..=max_chunk_y {
-                for chunk_z in min_chunk_z..=max_chunk_z {
+    pub fn populate_within_limits_with_progress(
+        &mut self,
+        generator: &DeterministicMap,
+        horizontal_limit: i32,
+        vertical_limit: i32,
+        mut progress: Option<&mut dyn FnMut(usize, usize)>,
+    ) {
+        let (chunk_xs, chunk_ys, chunk_zs) =
+            Self::chunk_ranges_for_limits(horizontal_limit, vertical_limit);
+        let total_chunks = chunk_xs.len() * chunk_ys.len() * chunk_zs.len();
+        let mut loaded = 0usize;
+        let notify_every = 1000usize;
+        let mut last_notified = 0usize;
+
+        for &chunk_x in &chunk_xs {
+            for &chunk_y in &chunk_ys {
+                for &chunk_z in &chunk_zs {
                     let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
-                    generator.populate_chunk(&mut self.reusable_chunk, position);
-                    let cached = CachedChunk::from_chunk(&self.reusable_chunk);
-                    self.chunks.insert(position, cached);
+                    self.populate_chunk_at(generator, position);
+                    loaded += 1;
+
+                    if let Some(callback) = progress.as_mut() {
+                        if loaded % notify_every == 0 || loaded == total_chunks {
+                            callback(loaded, total_chunks);
+                            last_notified = loaded;
+                        }
+                    }
                 }
             }
         }
+
+        if let Some(callback) = progress.as_mut() {
+            if loaded > 0 && loaded != last_notified {
+                callback(loaded, total_chunks);
+            }
+        }
+    }
+
+    pub fn populate_chunk_at(&mut self, generator: &DeterministicMap, position: ChunkPosition) {
+        generator.populate_chunk(&mut self.reusable_chunk, position);
+        let cached = CachedChunk::from_chunk(&self.reusable_chunk);
+        self.chunks.insert(position, cached);
+    }
+
+    pub fn chunk_ranges_for_limits(
+        horizontal_limit: i32,
+        vertical_limit: i32,
+    ) -> (Vec<i32>, Vec<i32>, Vec<i32>) {
+        let (x_range, y_range, z_range) = chunk_range_bounds(horizontal_limit, vertical_limit);
+        (x_range.collect(), y_range.collect(), z_range.collect())
+    }
+
+    pub fn chunk_count_for_limits(horizontal_limit: i32, vertical_limit: i32) -> usize {
+        let (x_range, y_range, z_range) = chunk_range_bounds(horizontal_limit, vertical_limit);
+        x_range.count() * y_range.count() * z_range.count()
     }
 
     pub fn chunk(&self, position: &ChunkPosition) -> Option<&CachedChunk> {
@@ -197,6 +258,28 @@ fn chunk_and_local_for_world_coord(coord: WorldCoord) -> (ChunkPosition, LocalBl
     (
         ChunkPosition::new(chunk_x, chunk_y, chunk_z),
         LocalBlockCoord::new(local_x, local_y, local_z),
+    )
+}
+
+fn chunk_range_bounds(
+    horizontal_limit: i32,
+    vertical_limit: i32,
+) -> (
+    RangeInclusive<i32>,
+    RangeInclusive<i32>,
+    RangeInclusive<i32>,
+) {
+    let min_chunk_x = div_floor(-horizontal_limit, CHUNK_WIDTH as i32);
+    let max_chunk_x = div_floor(horizontal_limit, CHUNK_WIDTH as i32);
+    let min_chunk_y = div_floor(-horizontal_limit, CHUNK_DEPTH as i32);
+    let max_chunk_y = div_floor(horizontal_limit, CHUNK_DEPTH as i32);
+    let min_chunk_z = div_floor(-vertical_limit, CHUNK_HEIGHT as i32);
+    let max_chunk_z = div_floor(vertical_limit, CHUNK_HEIGHT as i32);
+
+    (
+        min_chunk_x..=max_chunk_x,
+        min_chunk_y..=max_chunk_y,
+        min_chunk_z..=max_chunk_z,
     )
 }
 

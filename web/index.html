@@ -8,7 +8,15 @@
 </head>
 <body>
   <div id="start-screen">
-    <button type="button" id="start-button">Start</button>
+    <div class="start-card">
+      <div class="loading-title" id="loading-title">Loading Droneforge</div>
+      <div class="loading-status" id="loading-status">Preparing download...</div>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <div class="progress-detail" id="progress-detail">Downloading game files…</div>
+      <button type="button" id="start-button" disabled>Start</button>
+    </div>
   </div>
   <canvas id="glcanvas" tabindex="1"></canvas>
   <div class="z-level-controls" aria-label="Z level controls">
@@ -17,9 +25,6 @@
   </div>
 
   <script src="mq_js_bundle.js"></script>
-  <script>
-    load("droneforge-web.wasm", { canvas: "glcanvas" });
-  </script>
   <script src="start_menu.js"></script>
   <script src="map_ui.js"></script>
 </body>
