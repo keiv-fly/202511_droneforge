@@ -316,6 +316,16 @@ impl GameState {
         }
     }
 
+    fn prune_levels_outside_radius(&mut self, center_z: i32) {
+        let min_z = center_z.saturating_sub(PRELOAD_Z_RADIUS);
+        let max_z = center_z.saturating_add(PRELOAD_Z_RADIUS);
+        let in_range = |z: i32| z >= min_z && z <= max_z;
+
+        self.render_cache.retain(|key, _| in_range(key.z));
+        self.queued_keys.retain(|key| in_range(key.z));
+        self.load_queue.retain(|key| in_range(key.z));
+    }
+
     fn queue_key(&mut self, key: RenderChunkKey, front: bool) {
         if self.render_cache.contains_key(&key) || self.queued_keys.contains(&key) {
             return;
@@ -426,6 +436,7 @@ impl GameState {
         self.view_z = next_view_z;
         self.cache_level_now(next_view_z);
         self.enqueue_surrounding_levels(next_view_z);
+        self.prune_levels_outside_radius(next_view_z);
     }
 
     fn shift_view_z(&mut self, delta: i32) {
