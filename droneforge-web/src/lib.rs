@@ -12,9 +12,8 @@ const VIEW_MIN_Y: i32 = -60;
 const VIEW_MAX_Y: i32 = 60;
 const DEFAULT_VIEW_Z: i32 = 0;
 
-const BLOCK_PIXEL_SIZE: u16 = 32;
-// Keep effective block size at power 0 the same as before (≈15 px from 4 px * 3.8) even with smaller sprites.
-const BASE_ZOOM_AT_POWER_ZERO: f32 = 0.475;
+const BLOCK_PIXEL_SIZE: u16 = 16;
+const BASE_ZOOM_AT_POWER_ZERO: f32 = 1f32;
 const MIN_ZOOM_POWER: i32 = -48;
 const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
