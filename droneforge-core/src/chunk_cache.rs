@@ -53,14 +53,19 @@ pub struct ChunkCache {
 
 impl ChunkCache {
     pub fn new() -> Self {
+        Self::with_capacity(0)
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            chunks: HashMap::new(),
+            chunks: HashMap::with_capacity(capacity),
             reusable_chunk: Chunk::new(ChunkPosition::new(0, 0, 0), AIR),
         }
     }
 
     pub fn from_generator_with_limits(generator: &DeterministicMap) -> Self {
-        let mut cache = Self::new();
+        let total_chunks = Self::chunk_count_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT);
+        let mut cache = Self::with_capacity(total_chunks);
         cache.populate_within_limits(generator, HORIZONTAL_LIMIT, VERTICAL_LIMIT);
         cache
     }
@@ -69,7 +74,8 @@ impl ChunkCache {
         generator: &DeterministicMap,
         progress: &mut dyn FnMut(usize, usize),
     ) -> Self {
-        let mut cache = Self::new();
+        let total_chunks = Self::chunk_count_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT);
+        let mut cache = Self::with_capacity(total_chunks);
         cache.populate_within_limits_with_progress(
             generator,
             HORIZONTAL_LIMIT,
@@ -103,6 +109,8 @@ impl ChunkCache {
         let (chunk_xs, chunk_ys, chunk_zs) =
             Self::chunk_ranges_for_limits(horizontal_limit, vertical_limit);
         let total_chunks = chunk_xs.len() * chunk_ys.len() * chunk_zs.len();
+        self.chunks
+            .reserve(total_chunks.saturating_sub(self.chunks.len()));
         let mut loaded = 0usize;
         let notify_every = 1000usize;
         let mut last_notified = 0usize;

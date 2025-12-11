@@ -1003,11 +1003,12 @@ async fn build_chunk_cache_with_progress(generator: &DeterministicMap) -> (Chunk
     let build_start = get_time();
     let (chunk_xs, chunk_ys, chunk_zs) =
         ChunkCache::chunk_ranges_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT);
-    let total_chunks = (chunk_xs.len() * chunk_ys.len() * chunk_zs.len()) as u32;
+    let total_chunks_usize = chunk_xs.len() * chunk_ys.len() * chunk_zs.len();
+    let total_chunks = total_chunks_usize as u32;
 
     reset_initial_chunk_progress(total_chunks);
 
-    let mut chunk_cache = ChunkCache::new();
+    let mut chunk_cache = ChunkCache::with_capacity(total_chunks_usize);
     let mut loaded_chunks: u32 = 0;
     let mut next_progress_update = CHUNK_PROGRESS_STEP.min(total_chunks.max(1));
     let mut batch_counter: usize = 0;
