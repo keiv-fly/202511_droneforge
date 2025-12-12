@@ -30,18 +30,6 @@ static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
 static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
 
-struct BenchMetrics {
-    initial_chunk_cache_ms: f64,
-    initial_render_cache_ms: f64,
-    avg_chunk_load_ms: f64,
-}
-
-static mut BENCH_METRICS: BenchMetrics = BenchMetrics {
-    initial_chunk_cache_ms: 0.0,
-    initial_render_cache_ms: 0.0,
-    avg_chunk_load_ms: 0.0,
-};
-
 const MASK_NORTH: u8 = 1;
 const MASK_EAST: u8 = 2;
 const MASK_SOUTH: u8 = 4;
@@ -95,21 +83,6 @@ pub extern "C" fn chunk_cache_loaded_chunks() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn chunk_cache_total_chunks() -> u32 {
     INITIAL_CHUNK_TOTAL.load(Ordering::SeqCst)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn bench_initial_chunk_cache_ms() -> f64 {
-    unsafe { BENCH_METRICS.initial_chunk_cache_ms }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn bench_initial_render_cache_ms() -> f64 {
-    unsafe { BENCH_METRICS.initial_render_cache_ms }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn bench_avg_chunk_load_ms() -> f64 {
-    unsafe { BENCH_METRICS.avg_chunk_load_ms }
 }
 
 fn zoom_scale_from_power(power: i32) -> f32 {
@@ -238,6 +211,9 @@ pub struct GameState {
     last_reported_avg_ms: f64,
     initial_chunk_cache_ms: f64,
     initial_render_cache_ms: f64,
+    fps: f32,
+    fps_frame_count: u32,
+    fps_last_update_time: f64,
 }
 
 impl GameState {
@@ -297,6 +273,9 @@ impl GameState {
             last_reported_avg_ms: 0.0,
             initial_chunk_cache_ms,
             initial_render_cache_ms: 0.0,
+            fps: 0.0,
+            fps_frame_count: 0,
+            fps_last_update_time: 0.0,
         };
 
         let render_cache_start = get_time();
@@ -306,7 +285,7 @@ impl GameState {
         game.enqueue_surrounding_levels(DEFAULT_VIEW_Z);
         game.last_reported_avg_ms = game.average_load_time_ms();
         game.last_avg_update_time = get_time();
-        game.write_bench_metrics();
+        game.fps_last_update_time = get_time();
         game
     }
 
@@ -493,14 +472,6 @@ impl GameState {
         self.load_time_count += 1;
     }
 
-    fn write_bench_metrics(&self) {
-        unsafe {
-            BENCH_METRICS.initial_chunk_cache_ms = self.initial_chunk_cache_ms;
-            BENCH_METRICS.initial_render_cache_ms = self.initial_render_cache_ms;
-            BENCH_METRICS.avg_chunk_load_ms = self.last_reported_avg_ms;
-        }
-    }
-
     fn average_load_time_ms(&self) -> f64 {
         if self.load_time_count == 0 {
             return 0.0;
@@ -514,7 +485,17 @@ impl GameState {
             self.last_avg_update_time = now;
             self.last_reported_avg_ms = self.average_load_time_ms();
         }
-        self.write_bench_metrics();
+    }
+
+    fn update_fps_if_due(&mut self) {
+        let now = get_time();
+        self.fps_frame_count += 1;
+        let elapsed = now - self.fps_last_update_time;
+        if elapsed >= 1.0 {
+            self.fps = self.fps_frame_count as f32 / elapsed as f32;
+            self.fps_frame_count = 0;
+            self.fps_last_update_time = now;
+        }
     }
 
     fn set_view_z(&mut self, next_view_z: i32) {
@@ -659,6 +640,14 @@ impl GameState {
             &format!("zoom: {:.2}x", normalized_zoom),
             20.0,
             232.0,
+            24.0,
+            WHITE,
+        );
+
+        draw_text(
+            &format!("fps: {:.1}", self.fps),
+            20.0,
+            256.0,
             24.0,
             WHITE,
         );
@@ -1104,6 +1093,7 @@ pub async fn run() {
         game.handle_right_mouse_drag();
         game.process_load_queue();
         game.update_average_display_if_due();
+        game.update_fps_if_due();
 
         game.render();
 
