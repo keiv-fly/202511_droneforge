@@ -605,6 +605,20 @@ impl GameState {
         (pending, theoretical)
     }
 
+    fn pending_render_chunk_counts(&self) -> (usize, usize) {
+        let theoretical = self
+            .render_chunk_xs
+            .len()
+            .saturating_mul(self.render_chunk_ys.len());
+        let loaded = self
+            .render_cache
+            .keys()
+            .filter(|key| key.z == self.view_z)
+            .count();
+        let pending = theoretical.saturating_sub(loaded);
+        (pending, theoretical)
+    }
+
     fn build_render_chunk_texture(&mut self, key: RenderChunkKey) -> Option<(Texture2D, f64)> {
         if !self.render_chunk_ready(&key) {
             return None;
@@ -773,22 +787,28 @@ impl GameState {
             WHITE,
         );
 
-        let (pending_two_levels, total_two_levels) = self.pending_chunk_cache_counts();
         draw_text(
-            &format!(
-                "cache left z/z+1: {}/{}",
-                pending_two_levels, total_two_levels
-            ),
+            &format!("chunk cache queue: {}", self.chunk_cache_queue.len()),
             20.0,
             64.0,
             24.0,
             WHITE,
         );
 
+        let (pending_two_levels, total_two_levels) = self.pending_chunk_cache_counts();
         draw_text(
-            &format!("chunk cache queue: {}", self.chunk_cache_queue.len()),
+            &format!("chunk cache q z: {}/{}", pending_two_levels, total_two_levels),
             20.0,
             88.0,
+            24.0,
+            WHITE,
+        );
+
+        let (render_pending, render_total) = self.pending_render_chunk_counts();
+        draw_text(
+            &format!("render cache q z: {}/{}", render_pending, render_total),
+            20.0,
+            112.0,
             24.0,
             WHITE,
         );
@@ -798,7 +818,7 @@ impl GameState {
         } else {
             format!("avg render chunk: {:.2} ms", self.last_reported_avg_ms)
         };
-        draw_text(&render_avg_text, 20.0, 112.0, 24.0, WHITE);
+        draw_text(&render_avg_text, 20.0, 136.0, 24.0, WHITE);
 
         let cache_avg_text = if self.chunk_cache_frame_time_count == 0 {
             "avg chunk cache: --".to_string()
@@ -808,12 +828,12 @@ impl GameState {
                 self.chunk_cache_last_reported_avg_ms
             )
         };
-        draw_text(&cache_avg_text, 20.0, 136.0, 24.0, WHITE);
+        draw_text(&cache_avg_text, 20.0, 160.0, 24.0, WHITE);
 
         draw_text(
             &format!("zoom power: {}", self.zoom_power),
             20.0,
-            160.0,
+            184.0,
             24.0,
             WHITE,
         );
@@ -828,7 +848,7 @@ impl GameState {
         draw_text(
             &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
             20.0,
-            184.0,
+            208.0,
             24.0,
             WHITE,
         );
@@ -846,16 +866,16 @@ impl GameState {
                 center_tile_x, center_tile_y, self.view_z
             ),
             20.0,
-            208.0,
+            232.0,
             24.0,
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 232.0, 24.0, WHITE);
+        draw_text(&format!("z: {}", self.view_z), 20.0, 256.0, 24.0, WHITE);
         draw_text(
             &format!("zoom: {:.2}x", normalized_zoom),
             20.0,
-            256.0,
+            280.0,
             24.0,
             WHITE,
         );
@@ -863,7 +883,7 @@ impl GameState {
         draw_text(
             &format!("fps: {:.1}", self.fps),
             20.0,
-            280.0,
+            304.0,
             24.0,
             WHITE,
         );
