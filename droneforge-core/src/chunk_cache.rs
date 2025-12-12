@@ -162,6 +162,14 @@ impl ChunkCache {
         self.chunks.get(position)
     }
 
+    pub fn has_chunk(&self, position: &ChunkPosition) -> bool {
+        self.chunks.contains_key(position)
+    }
+
+    pub fn has_level(&self, chunk_z: i32) -> bool {
+        self.chunks.keys().any(|pos| pos.z == chunk_z)
+    }
+
     pub fn block_at_world(&self, coord: WorldCoord) -> Option<BlockId> {
         let (chunk_pos, local) = chunk_and_local_for_world_coord(coord);
         self.chunk(&chunk_pos)

@@ -1,5 +1,3 @@
-const WASM_WEIGHT = 0.4;
-const CHUNK_WEIGHT = 0.6;
 const WASM_PATH = "droneforge-web.wasm";
 
 function createBenchMetrics() {
@@ -101,10 +99,7 @@ function formatBytes(bytes) {
 }
 
 function combinedProgress(state) {
-    return Math.min(
-        1,
-        state.wasmProgress * WASM_WEIGHT + state.chunkProgress * CHUNK_WEIGHT,
-    );
+    return state.ready ? 1 : 0;
 }
 
 function updateProgressUI(state, ui, stageText) {
@@ -114,12 +109,8 @@ function updateProgressUI(state, ui, stageText) {
     ui.progressTrack.setAttribute("aria-valuenow", String(percent));
     ui.loadingStatus.textContent = stageText;
 
-    if (state.chunkProgress > 0) {
-        if (state.chunkTotal > 0) {
-            ui.progressDetail.textContent = `Caching world ${state.chunkLoaded.toLocaleString()} / ${state.chunkTotal.toLocaleString()}`;
-        } else {
-            ui.progressDetail.textContent = `Caching world ${(state.chunkProgress * 100).toFixed(1)}%`;
-        }
+    if (state.ready) {
+        ui.progressDetail.textContent = "Ready. Press Start to play.";
     } else if (state.wasmProgress < 1) {
         if (state.wasmTotalBytes > 0) {
             ui.progressDetail.textContent = `Downloading ${formatBytes(state.wasmLoadedBytes)} / ${formatBytes(state.wasmTotalBytes)}`;
@@ -127,7 +118,7 @@ function updateProgressUI(state, ui, stageText) {
             ui.progressDetail.textContent = "Downloading game files…";
         }
     } else {
-        ui.progressDetail.textContent = "Starting simulation…";
+        ui.progressDetail.textContent = "Initializing game…";
     }
 }
 
@@ -135,9 +126,8 @@ function markReady(state, ui) {
     if (state.ready) return;
     state.ready = true;
     state.wasmProgress = 1;
-    state.chunkProgress = 1;
     updateProgressUI(state, ui, "Ready to start");
-    ui.progressDetail.textContent = "World cached. Press Start to play.";
+    ui.progressDetail.textContent = "Ready. Press Start to play.";
     ui.startButton.disabled = false;
     ui.startButton.textContent = "Start";
 
@@ -215,41 +205,6 @@ async function instantiateWasm(bytes) {
     instance.exports.main();
 }
 
-function startChunkPolling(state, ui) {
-    const poll = () => {
-        if (!wasm_exports) {
-            requestAnimationFrame(poll);
-            return;
-        }
-
-        const totalFn = wasm_exports.chunk_cache_total_chunks;
-        const loadedFn = wasm_exports.chunk_cache_loaded_chunks;
-        const fractionFn = wasm_exports.chunk_cache_progress_fraction;
-
-        const total = typeof totalFn === "function" ? totalFn() : 0;
-        const loaded = typeof loadedFn === "function" ? loadedFn() : 0;
-        const fraction = typeof fractionFn === "function" ? fractionFn() : 0;
-
-        if (total > 0) {
-            state.chunkTotal = total;
-            state.chunkLoaded = Math.min(loaded, total);
-            state.chunkProgress = state.chunkLoaded / total;
-        } else {
-            state.chunkProgress = fraction;
-        }
-
-        updateProgressUI(state, ui, "Caching world data");
-
-        if (state.chunkProgress >= 0.999 && (total === 0 || state.chunkLoaded >= total)) {
-            markReady(state, ui);
-        } else {
-            requestAnimationFrame(poll);
-        }
-    };
-
-    poll();
-}
-
 async function startLoading(state, ui) {
     try {
         const wasmBytes = await fetchWasmWithProgress(WASM_PATH, (loaded, total) => {
@@ -263,7 +218,7 @@ async function startLoading(state, ui) {
         updateProgressUI(state, ui, "Initializing game");
 
         await instantiateWasm(wasmBytes);
-        startChunkPolling(state, ui);
+        markReady(state, ui);
     } catch (error) {
         console.error("Failed to load game", error);
         ui.loadingStatus.textContent = "Failed to load game";
@@ -293,9 +248,6 @@ window.addEventListener("load", () => {
         wasmProgress: 0,
         wasmLoadedBytes: 0,
         wasmTotalBytes: 0,
-        chunkProgress: 0,
-        chunkLoaded: 0,
-        chunkTotal: 0,
         ready: false,
         startClicked: false,
         firstFrameProbeStarted: false,

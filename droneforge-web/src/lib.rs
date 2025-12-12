@@ -1,3 +1,4 @@
+use droneforge_core::chunk::CHUNK_HEIGHT;
 use droneforge_core::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
 use droneforge_core::{AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, World, WorldCoord};
 #[cfg(target_arch = "wasm32")]
@@ -20,10 +21,9 @@ const ZOOM_FACTOR: f32 = 1.1;
 
 const RENDER_CHUNK_SIZE: i32 = 32;
 const PRELOAD_Z_RADIUS: i32 = 5;
+const CHUNK_CACHE_CHUNKS_PER_FRAME: usize = 256;
 const CHUNKS_PER_FRAME: usize = 1;
-const INITIAL_CACHE_CHUNKS_PER_FRAME: usize = 256;
 const LOAD_METRIC_INTERVAL_SECS: f64 = 5.0;
-const CHUNK_PROGRESS_STEP: u32 = 1_000;
 
 static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 
@@ -51,15 +51,6 @@ fn queue_z_delta(delta: i32) {
 
 fn take_pending_z_delta() -> i32 {
     PENDING_Z_DELTA.swap(0, Ordering::SeqCst)
-}
-
-fn reset_initial_chunk_progress(total_chunks: u32) {
-    INITIAL_CHUNK_TOTAL.store(total_chunks, Ordering::SeqCst);
-    INITIAL_CHUNK_LOADED.store(0, Ordering::SeqCst);
-}
-
-fn set_initial_chunk_loaded(loaded: u32) {
-    INITIAL_CHUNK_LOADED.store(loaded, Ordering::SeqCst);
 }
 
 #[unsafe(no_mangle)]
@@ -205,12 +196,21 @@ pub struct GameState {
     last_right_drag_pos: Option<Vec2>,
     render_chunk_xs: Vec<i32>,
     render_chunk_ys: Vec<i32>,
+    world_chunk_xs: Vec<i32>,
+    world_chunk_ys: Vec<i32>,
+    world_chunk_zs: Vec<i32>,
+    world_chunk_z_set: HashSet<i32>,
+    chunk_cache_queue: VecDeque<ChunkPosition>,
+    chunk_cache_queued: HashSet<ChunkPosition>,
     load_time_total_ms: f64,
     load_time_count: u64,
     last_avg_update_time: f64,
     last_reported_avg_ms: f64,
-    initial_chunk_cache_ms: f64,
-    initial_render_cache_ms: f64,
+    chunk_cache_frame_time_total_ms: f64,
+    chunk_cache_frame_time_count: u64,
+    chunk_cache_last_avg_update_time: f64,
+    chunk_cache_last_reported_avg_ms: f64,
+    skip_chunk_cache_processing: bool,
     fps: f32,
     fps_frame_count: u32,
     fps_last_update_time: f64,
@@ -219,29 +219,24 @@ pub struct GameState {
 impl GameState {
     pub fn new() -> Self {
         let generator = DeterministicMap::new(42);
-        let chunk_cache_start = get_time();
-        let chunk_cache = ChunkCache::from_generator_with_limits(&generator);
-        let initial_chunk_cache_ms = (get_time() - chunk_cache_start) * 1000.0;
-        Self::build(generator, chunk_cache, initial_chunk_cache_ms)
+        let cache_capacity =
+            ChunkCache::chunk_count_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT).max(1);
+        let chunk_cache = ChunkCache::with_capacity(cache_capacity);
+        Self::build(generator, chunk_cache)
     }
 
-    pub fn new_with_cache(
-        generator: DeterministicMap,
-        chunk_cache: ChunkCache,
-        initial_chunk_cache_ms: f64,
-    ) -> Self {
-        Self::build(generator, chunk_cache, initial_chunk_cache_ms)
+    pub fn new_with_cache(generator: DeterministicMap, chunk_cache: ChunkCache) -> Self {
+        Self::build(generator, chunk_cache)
     }
 
-    fn build(
-        generator: DeterministicMap,
-        chunk_cache: ChunkCache,
-        initial_chunk_cache_ms: f64,
-    ) -> Self {
+    fn build(generator: DeterministicMap, chunk_cache: ChunkCache) -> Self {
         let initial_zoom_power = 0;
         let palette = BlockPalette;
         let (render_chunk_xs, render_chunk_ys) =
             render_chunk_ranges(VIEW_MIN_X, VIEW_MAX_X, VIEW_MIN_Y, VIEW_MAX_Y);
+        let (world_chunk_xs, world_chunk_ys, world_chunk_zs) =
+            ChunkCache::chunk_ranges_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT);
+        let world_chunk_z_set: HashSet<i32> = world_chunk_zs.iter().copied().collect();
         let (chunk_width_px, chunk_depth_px) = render_chunk_pixel_dimensions();
         let scratch_image =
             Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
@@ -267,25 +262,33 @@ impl GameState {
             last_right_drag_pos: None,
             render_chunk_xs,
             render_chunk_ys,
+            world_chunk_xs,
+            world_chunk_ys,
+            world_chunk_zs,
+            world_chunk_z_set,
+            chunk_cache_queue: VecDeque::new(),
+            chunk_cache_queued: HashSet::new(),
             load_time_total_ms: 0.0,
             load_time_count: 0,
             last_avg_update_time: 0.0,
             last_reported_avg_ms: 0.0,
-            initial_chunk_cache_ms,
-            initial_render_cache_ms: 0.0,
+            chunk_cache_frame_time_total_ms: 0.0,
+            chunk_cache_frame_time_count: 0,
+            chunk_cache_last_avg_update_time: 0.0,
+            chunk_cache_last_reported_avg_ms: 0.0,
+            skip_chunk_cache_processing: false,
             fps: 0.0,
             fps_frame_count: 0,
             fps_last_update_time: 0.0,
         };
 
-        let render_cache_start = get_time();
-        game.cache_levels_range_now(DEFAULT_VIEW_Z, PRELOAD_Z_RADIUS);
-        game.initial_render_cache_ms = (get_time() - render_cache_start) * 1000.0;
+        game.prime_chunk_cache_queue(DEFAULT_VIEW_Z);
+        game.enqueue_render_levels(DEFAULT_VIEW_Z);
 
-        game.enqueue_surrounding_levels(DEFAULT_VIEW_Z);
         game.last_reported_avg_ms = game.average_load_time_ms();
         game.last_avg_update_time = get_time();
-        game.fps_last_update_time = get_time();
+        game.chunk_cache_last_avg_update_time = game.last_avg_update_time;
+        game.fps_last_update_time = game.last_avg_update_time;
         game
     }
 
@@ -330,18 +333,22 @@ impl GameState {
                 continue;
             }
 
-            let (texture, duration_ms) = self.build_render_chunk_texture(key);
-            self.render_cache.insert(key, texture);
-            self.record_load_time(duration_ms);
+            if !self.render_chunk_ready(&key) {
+                self.queue_key(key, true);
+                continue;
+            }
+
+            if let Some((texture, duration_ms)) = self.build_render_chunk_texture(key) {
+                self.render_cache.insert(key, texture);
+                self.record_load_time(duration_ms);
+            }
             self.queued_keys.remove(&key);
         }
     }
 
-    fn cache_levels_range_now(&mut self, center_z: i32, radius: i32) {
-        for dz in -radius..=radius {
-            let target_z = center_z.saturating_add(dz);
-            self.cache_level_now(target_z);
-        }
+    fn enqueue_render_levels(&mut self, center_z: i32) {
+        self.enqueue_chunks_for_z(center_z, true);
+        self.enqueue_surrounding_levels(center_z);
     }
 
     fn enqueue_surrounding_levels(&mut self, center_z: i32) {
@@ -351,11 +358,11 @@ impl GameState {
             }
 
             let target_z = center_z.saturating_add(dz);
-            self.enqueue_chunks_for_z(target_z);
+            self.enqueue_chunks_for_z(target_z, false);
         }
     }
 
-    fn enqueue_chunks_for_z(&mut self, z: i32) {
+    fn enqueue_chunks_for_z(&mut self, z: i32, front: bool) {
         let keys: Vec<RenderChunkKey> = self
             .render_chunk_ys
             .iter()
@@ -371,7 +378,7 @@ impl GameState {
             .collect();
 
         for key in keys {
-            self.queue_key(key, false);
+            self.queue_key(key, front);
         }
     }
 
@@ -398,6 +405,16 @@ impl GameState {
         }
     }
 
+    fn render_chunk_ready(&self, key: &RenderChunkKey) -> bool {
+        let chunk_z = div_floor(key.z, CHUNK_HEIGHT as i32);
+        let wall_chunk_z = div_floor(key.z.saturating_add(1), CHUNK_HEIGHT as i32);
+
+        let base = ChunkPosition::new(key.chunk_x, key.chunk_y, chunk_z);
+        let wall = ChunkPosition::new(key.chunk_x, key.chunk_y, wall_chunk_z);
+
+        self.chunk_cache.has_chunk(&base) && self.chunk_cache.has_chunk(&wall)
+    }
+
     fn process_load_queue(&mut self) {
         for _ in 0..CHUNKS_PER_FRAME {
             if let Some(key) = self.load_queue.pop_front() {
@@ -406,16 +423,193 @@ impl GameState {
                     continue;
                 }
 
-                let (texture, duration_ms) = self.build_render_chunk_texture(key);
-                self.render_cache.insert(key, texture);
-                self.record_load_time(duration_ms);
+                if !self.render_chunk_ready(&key) {
+                    self.queue_key(key, false);
+                    continue;
+                }
+
+                if let Some((texture, duration_ms)) = self.build_render_chunk_texture(key) {
+                    self.render_cache.insert(key, texture);
+                    self.record_load_time(duration_ms);
+                }
             } else {
                 break;
             }
         }
     }
 
-    fn build_render_chunk_texture(&mut self, key: RenderChunkKey) -> (Texture2D, f64) {
+    fn prime_chunk_cache_queue(&mut self, base_world_z: i32) {
+        let mut prioritized_levels = vec![0, 1];
+        prioritized_levels.extend((-5..= -1).collect::<Vec<_>>());
+        prioritized_levels.extend((2..=6).collect::<Vec<_>>());
+        self.rebuild_chunk_cache_queue_from_world_levels(&prioritized_levels);
+        self.enqueue_render_levels(base_world_z);
+    }
+
+    fn reprioritize_chunk_cache_for_view(&mut self, base_world_z: i32) {
+        let mut prioritized_levels = Vec::new();
+        prioritized_levels.push(base_world_z);
+        prioritized_levels.push(base_world_z.saturating_add(1));
+        for dz in -5..=6 {
+            if dz == 0 || dz == 1 {
+                continue;
+            }
+            prioritized_levels.push(base_world_z.saturating_add(dz));
+        }
+        self.rebuild_chunk_cache_queue_from_world_levels(&prioritized_levels);
+        self.skip_chunk_cache_processing = true;
+    }
+
+    fn rebuild_chunk_cache_queue_from_world_levels(&mut self, levels: &[i32]) {
+        self.chunk_cache_queue.clear();
+        self.chunk_cache_queued.clear();
+
+        let mut ordered_chunk_zs = Vec::new();
+        let mut seen_chunk_zs = HashSet::new();
+
+        for &level in levels {
+            let chunk_z = div_floor(level, CHUNK_HEIGHT as i32);
+            if !self.world_chunk_z_set.contains(&chunk_z) {
+                continue;
+            }
+            if seen_chunk_zs.insert(chunk_z) {
+                ordered_chunk_zs.push(chunk_z);
+            }
+        }
+
+        for &chunk_z in &self.world_chunk_zs {
+            if seen_chunk_zs.contains(&chunk_z) {
+                continue;
+            }
+            ordered_chunk_zs.push(chunk_z);
+        }
+
+        for chunk_z in ordered_chunk_zs {
+            self.queue_full_chunk_plane(chunk_z);
+        }
+    }
+
+    fn queue_full_chunk_plane(&mut self, chunk_z: i32) {
+        let chunk_ys = self.world_chunk_ys.clone();
+        let chunk_xs = self.world_chunk_xs.clone();
+
+        for chunk_y in chunk_ys.into_iter() {
+            for chunk_x in chunk_xs.iter().copied() {
+                let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
+                self.queue_chunk_cache_position(position);
+            }
+        }
+    }
+
+    fn queue_chunk_cache_position(&mut self, position: ChunkPosition) {
+        if self.chunk_cache.has_chunk(&position) || self.chunk_cache_queued.contains(&position) {
+            return;
+        }
+
+        self.chunk_cache_queued.insert(position);
+        self.chunk_cache_queue.push_back(position);
+    }
+
+    fn process_chunk_cache_queue(&mut self) {
+        if self.skip_chunk_cache_processing {
+            self.skip_chunk_cache_processing = false;
+            return;
+        }
+
+        let frame_start = get_time();
+        let mut processed = 0usize;
+        while processed < CHUNK_CACHE_CHUNKS_PER_FRAME {
+            if let Some(position) = self.chunk_cache_queue.pop_front() {
+                self.chunk_cache_queued.remove(&position);
+                if self.chunk_cache.has_chunk(&position) {
+                    continue;
+                }
+
+                self.chunk_cache
+                    .populate_chunk_at(&self.generator, position);
+                processed += 1;
+                self.enqueue_render_for_new_chunk(position);
+            } else {
+                break;
+            }
+        }
+
+        if processed > 0 {
+            let duration_ms = (get_time() - frame_start) * 1000.0;
+            self.record_chunk_cache_frame_time(duration_ms);
+        }
+    }
+
+    fn enqueue_render_for_new_chunk(&mut self, position: ChunkPosition) {
+        let min_z = self.view_z.saturating_sub(PRELOAD_Z_RADIUS);
+        let max_z = self.view_z.saturating_add(PRELOAD_Z_RADIUS);
+
+        for z in min_z..=max_z {
+            let chunk_z = div_floor(z, CHUNK_HEIGHT as i32);
+            if chunk_z != position.z {
+                continue;
+            }
+
+            let key = RenderChunkKey {
+                chunk_x: position.x,
+                chunk_y: position.y,
+                z,
+            };
+            let prioritize = z == self.view_z;
+            self.queue_key(key, prioritize);
+        }
+    }
+
+    fn record_chunk_cache_frame_time(&mut self, duration_ms: f64) {
+        self.chunk_cache_frame_time_total_ms += duration_ms;
+        self.chunk_cache_frame_time_count += 1;
+    }
+
+    fn average_chunk_cache_frame_time_ms(&self) -> f64 {
+        if self.chunk_cache_frame_time_count == 0 {
+            return 0.0;
+        }
+        self.chunk_cache_frame_time_total_ms / self.chunk_cache_frame_time_count as f64
+    }
+
+    fn update_chunk_cache_average_if_due(&mut self) {
+        let now = get_time();
+        if now - self.chunk_cache_last_avg_update_time >= LOAD_METRIC_INTERVAL_SECS {
+            self.chunk_cache_last_avg_update_time = now;
+            self.chunk_cache_last_reported_avg_ms = self.average_chunk_cache_frame_time_ms();
+        }
+    }
+
+    fn level_has_any_chunk(&self, world_z: i32) -> bool {
+        let chunk_z = div_floor(world_z, CHUNK_HEIGHT as i32);
+        self.chunk_cache.has_level(chunk_z)
+    }
+
+    fn pending_chunk_cache_counts(&self) -> (usize, usize) {
+        let chunk_z = div_floor(self.view_z, CHUNK_HEIGHT as i32);
+        let wall_chunk_z = div_floor(self.view_z.saturating_add(1), CHUNK_HEIGHT as i32);
+
+        let plane_chunks = self.world_chunk_xs.len().saturating_mul(self.world_chunk_ys.len());
+        let planes = if chunk_z == wall_chunk_z { 1 } else { 2 };
+        let theoretical = plane_chunks.saturating_mul(planes);
+
+        let mut pending = 0usize;
+        for position in &self.chunk_cache_queue {
+            if position.z == chunk_z || position.z == wall_chunk_z {
+                if !self.chunk_cache.has_chunk(position) {
+                    pending = pending.saturating_add(1);
+                }
+            }
+        }
+
+        (pending, theoretical)
+    }
+
+    fn build_render_chunk_texture(&mut self, key: RenderChunkKey) -> Option<(Texture2D, f64)> {
+        if !self.render_chunk_ready(&key) {
+            return None;
+        }
+
         let start_secs = get_time();
         let palette = BlockPalette;
 
@@ -431,21 +625,25 @@ impl GameState {
             for x in 0..RENDER_CHUNK_SIZE as usize {
                 let world_x = base_x + x as i32;
                 let world_y = base_y + y as i32;
-                let block = block_at(&self.chunk_cache, &self.generator, world_x, world_y, key.z);
-                let upper_block =
-                    block_at(&self.chunk_cache, &self.generator, world_x, world_y, z_wall);
+                let block = block_at(&self.chunk_cache, world_x, world_y, key.z);
+                let upper_block = block_at(&self.chunk_cache, world_x, world_y, z_wall);
 
-                if is_solid(upper_block) {
-                    let mask = wall_edge_mask(
-                        &self.chunk_cache,
-                        &self.generator,
-                        world_x,
-                        world_y,
-                        z_wall,
-                    );
+                let Some(block) = block else {
+                    continue;
+                };
 
-                    if let Some(tile) = self.tiles.wall_image(upper_block, mask) {
-                        blit_tile(&mut self.scratch_image, tile, x, y);
+                if let Some(upper_block) = upper_block {
+                    if is_solid(upper_block) {
+                        let mask = wall_edge_mask(&self.chunk_cache, world_x, world_y, z_wall);
+
+                        if let Some(tile) = self.tiles.wall_image(upper_block, mask) {
+                            blit_tile(&mut self.scratch_image, tile, x, y);
+                        } else if let Some(tile) = self.tiles.floor_image(block) {
+                            blit_tile(&mut self.scratch_image, tile, x, y);
+                        } else {
+                            let color = palette.color_for(block);
+                            fill_block(&mut self.scratch_image, x, y, color);
+                        }
                     } else if let Some(tile) = self.tiles.floor_image(block) {
                         blit_tile(&mut self.scratch_image, tile, x, y);
                     } else {
@@ -464,7 +662,7 @@ impl GameState {
         let texture = Texture2D::from_image(&self.scratch_image);
         texture.set_filter(FilterMode::Nearest);
         let duration_ms = (get_time() - start_secs) * 1000.0;
-        (texture, duration_ms)
+        Some((texture, duration_ms))
     }
 
     fn record_load_time(&mut self, duration_ms: f64) {
@@ -479,7 +677,7 @@ impl GameState {
         self.load_time_total_ms / self.load_time_count as f64
     }
 
-    fn update_average_display_if_due(&mut self) {
+    fn update_render_average_if_due(&mut self) {
         let now = get_time();
         if now - self.last_avg_update_time >= LOAD_METRIC_INTERVAL_SECS {
             self.last_avg_update_time = now;
@@ -505,8 +703,12 @@ impl GameState {
 
         self.view_z = next_view_z;
         self.cache_level_now(next_view_z);
-        self.enqueue_surrounding_levels(next_view_z);
+        self.enqueue_render_levels(next_view_z);
         self.prune_levels_outside_radius(next_view_z);
+
+        if !self.level_has_any_chunk(next_view_z) {
+            self.reprioritize_chunk_cache_for_view(next_view_z);
+        }
     }
 
     fn shift_view_z(&mut self, delta: i32) {
@@ -571,8 +773,12 @@ impl GameState {
             WHITE,
         );
 
+        let (pending_two_levels, total_two_levels) = self.pending_chunk_cache_counts();
         draw_text(
-            &format!("chunk cache: {:.2} ms", self.initial_chunk_cache_ms),
+            &format!(
+                "cache left z/z+1: {}/{}",
+                pending_two_levels, total_two_levels
+            ),
             20.0,
             64.0,
             24.0,
@@ -580,24 +786,34 @@ impl GameState {
         );
 
         draw_text(
-            &format!("render cache ±5: {:.2} ms", self.initial_render_cache_ms),
+            &format!("chunk cache queue: {}", self.chunk_cache_queue.len()),
             20.0,
             88.0,
             24.0,
             WHITE,
         );
 
-        let avg_text = if self.load_time_count == 0 {
-            "avg chunk load: --".to_string()
+        let render_avg_text = if self.load_time_count == 0 {
+            "avg render chunk: --".to_string()
         } else {
-            format!("avg chunk load: {:.2} ms", self.last_reported_avg_ms)
+            format!("avg render chunk: {:.2} ms", self.last_reported_avg_ms)
         };
-        draw_text(&avg_text, 20.0, 112.0, 24.0, WHITE);
+        draw_text(&render_avg_text, 20.0, 112.0, 24.0, WHITE);
+
+        let cache_avg_text = if self.chunk_cache_frame_time_count == 0 {
+            "avg chunk cache: --".to_string()
+        } else {
+            format!(
+                "avg chunk cache: {:.2} ms",
+                self.chunk_cache_last_reported_avg_ms
+            )
+        };
+        draw_text(&cache_avg_text, 20.0, 136.0, 24.0, WHITE);
 
         draw_text(
             &format!("zoom power: {}", self.zoom_power),
             20.0,
-            136.0,
+            160.0,
             24.0,
             WHITE,
         );
@@ -612,7 +828,7 @@ impl GameState {
         draw_text(
             &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
             20.0,
-            160.0,
+            184.0,
             24.0,
             WHITE,
         );
@@ -630,16 +846,16 @@ impl GameState {
                 center_tile_x, center_tile_y, self.view_z
             ),
             20.0,
-            184.0,
+            208.0,
             24.0,
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 208.0, 24.0, WHITE);
+        draw_text(&format!("z: {}", self.view_z), 20.0, 232.0, 24.0, WHITE);
         draw_text(
             &format!("zoom: {:.2}x", normalized_zoom),
             20.0,
-            232.0,
+            256.0,
             24.0,
             WHITE,
         );
@@ -647,7 +863,7 @@ impl GameState {
         draw_text(
             &format!("fps: {:.1}", self.fps),
             20.0,
-            256.0,
+            280.0,
             24.0,
             WHITE,
         );
@@ -835,30 +1051,32 @@ fn div_floor(a: i32, b: i32) -> i32 {
     }
 }
 
-fn block_at(cache: &ChunkCache, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> BlockId {
+fn block_at(cache: &ChunkCache, x: i32, y: i32, z: i32) -> Option<BlockId> {
     let coord = WorldCoord::new(x, y, z);
-    cache
-        .block_at_world(coord)
-        .unwrap_or_else(|| generator.block_at(coord))
+    cache.block_at_world(coord)
 }
 
 fn is_solid(block: BlockId) -> bool {
     block != AIR
 }
 
-fn wall_edge_mask(cache: &ChunkCache, generator: &DeterministicMap, x: i32, y: i32, z: i32) -> u8 {
+fn is_solid_opt(block: Option<BlockId>) -> bool {
+    block.map_or(false, is_solid)
+}
+
+fn wall_edge_mask(cache: &ChunkCache, x: i32, y: i32, z: i32) -> u8 {
     let mut mask = 0u8;
 
-    if !is_solid(block_at(cache, generator, x, y - 1, z)) {
+    if !is_solid_opt(block_at(cache, x, y - 1, z)) {
         mask |= MASK_NORTH;
     }
-    if !is_solid(block_at(cache, generator, x + 1, y, z)) {
+    if !is_solid_opt(block_at(cache, x + 1, y, z)) {
         mask |= MASK_EAST;
     }
-    if !is_solid(block_at(cache, generator, x, y + 1, z)) {
+    if !is_solid_opt(block_at(cache, x, y + 1, z)) {
         mask |= MASK_SOUTH;
     }
-    if !is_solid(block_at(cache, generator, x - 1, y, z)) {
+    if !is_solid_opt(block_at(cache, x - 1, y, z)) {
         mask |= MASK_WEST;
     }
 
@@ -1025,52 +1243,13 @@ fn draw_wall_outline(image: &mut Image, block_x: usize, block_y: usize, mask: u8
     }
 }
 
-async fn build_chunk_cache_with_progress(generator: &DeterministicMap) -> (ChunkCache, f64) {
-    let build_start = get_time();
-    let (chunk_xs, chunk_ys, chunk_zs) =
-        ChunkCache::chunk_ranges_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT);
-    let total_chunks_usize = chunk_xs.len() * chunk_ys.len() * chunk_zs.len();
-    let total_chunks = total_chunks_usize as u32;
-
-    reset_initial_chunk_progress(total_chunks);
-
-    let mut chunk_cache = ChunkCache::with_capacity(total_chunks_usize);
-    let mut loaded_chunks: u32 = 0;
-    let mut next_progress_update = CHUNK_PROGRESS_STEP.min(total_chunks.max(1));
-    let mut batch_counter: usize = 0;
-
-    for &chunk_x in &chunk_xs {
-        for &chunk_y in &chunk_ys {
-            for &chunk_z in &chunk_zs {
-                let position = ChunkPosition::new(chunk_x, chunk_y, chunk_z);
-                chunk_cache.populate_chunk_at(generator, position);
-                loaded_chunks = loaded_chunks.saturating_add(1);
-                batch_counter += 1;
-
-                if loaded_chunks >= next_progress_update || loaded_chunks == total_chunks {
-                    set_initial_chunk_loaded(loaded_chunks.min(total_chunks));
-                    next_progress_update = (loaded_chunks.saturating_add(CHUNK_PROGRESS_STEP))
-                        .min(total_chunks.max(1));
-                }
-
-                if batch_counter >= INITIAL_CACHE_CHUNKS_PER_FRAME {
-                    batch_counter = 0;
-                    next_frame().await;
-                }
-            }
-        }
-    }
-
-    set_initial_chunk_loaded(total_chunks);
-    let elapsed_ms = (get_time() - build_start) * 1000.0;
-    (chunk_cache, elapsed_ms)
-}
-
 pub async fn run() {
     install_panic_hook();
     let generator = DeterministicMap::new(42);
-    let (chunk_cache, chunk_cache_ms) = build_chunk_cache_with_progress(&generator).await;
-    let mut game = GameState::new_with_cache(generator, chunk_cache, chunk_cache_ms);
+    let cache_capacity =
+        ChunkCache::chunk_count_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT).max(1);
+    let chunk_cache = ChunkCache::with_capacity(cache_capacity);
+    let mut game = GameState::new_with_cache(generator, chunk_cache);
     game.initialize_camera_center();
     let mut accumulator = 0.0_f32;
     let fixed_step = 1.0_f32 / 60.0_f32; // 60 Hz simulation
@@ -1091,8 +1270,10 @@ pub async fn run() {
         game.handle_mouse_wheel_zoom();
         game.handle_pinch_zoom();
         game.handle_right_mouse_drag();
+        game.process_chunk_cache_queue();
         game.process_load_queue();
-        game.update_average_display_if_due();
+        game.update_render_average_if_due();
+        game.update_chunk_cache_average_if_due();
         game.update_fps_if_due();
 
         game.render();
