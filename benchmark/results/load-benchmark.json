@@ -1,0 +1,301 @@
+{
+  "generatedAt": "2025-12-12T15:18:34.626Z",
+  "mode": "playwright",
+  "runs": 10,
+  "url": "http://127.0.0.1:8005/index.html",
+  "environment": {
+    "url": "http://127.0.0.1:8005/index.html",
+    "os": {
+      "platform": "win32",
+      "release": "10.0.26200",
+      "arch": "x64",
+      "version": "Windows 11 Pro"
+    },
+    "browser": {
+      "name": "chromium",
+      "version": "143.0.7499.4",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/143.0.7499.4 Safari/537.36"
+    },
+    "cpu": {
+      "model": "AMD Ryzen 7 PRO 7840U w/ Radeon 780M Graphics  ",
+      "speedMHz": 3294,
+      "cores": 16
+    }
+  },
+  "metrics": {
+    "perRun": [
+      {
+        "run": 1,
+        "points": {
+          "gameHtmlStart": 12.100000008940697,
+          "gameLoadStart": 24.700000002980232,
+          "gameReadyAt": 22951.30000001192,
+          "firstFrameAt": 23089.5
+        },
+        "values": {
+          "loadScreenBoot": 12.599999994039536,
+          "loadingScreen": 22926.60000000894,
+          "loadingFirstFrame": 138.19999998807907,
+          "firstFrameDelta": 16.69999999999709,
+          "firstFps": 59.880239520968516,
+          "chunkLoadingTime": 21898.9999294281,
+          "renderCaching5": 950.0000476837158,
+          "avgChunkLoad": 2.698863771828738
+        }
+      },
+      {
+        "run": 2,
+        "points": {
+          "gameHtmlStart": 10.200000002980232,
+          "gameLoadStart": 22.099999994039536,
+          "gameReadyAt": 22270.70000000298,
+          "firstFrameAt": 22409.20000000298
+        },
+        "values": {
+          "loadScreenBoot": 11.899999991059303,
+          "loadingScreen": 22248.60000000894,
+          "loadingFirstFrame": 138.5,
+          "firstFrameDelta": 16.700000000000728,
+          "firstFps": 59.88023952095548,
+          "chunkLoadingTime": 21241.999864578247,
+          "renderCaching5": 954.9999237060547,
+          "avgChunkLoad": 2.713067965074019
+        }
+      },
+      {
+        "run": 3,
+        "points": {
+          "gameHtmlStart": 6.899999991059303,
+          "gameLoadStart": 16.700000002980232,
+          "gameReadyAt": 22413.20000000298,
+          "firstFrameAt": 22556
+        },
+        "values": {
+          "loadScreenBoot": 9.800000011920929,
+          "loadingScreen": 22396.5,
+          "loadingFirstFrame": 142.79999999701977,
+          "firstFrameDelta": 16.69999999999709,
+          "firstFps": 59.880239520968516,
+          "chunkLoadingTime": 21378.000020980835,
+          "renderCaching5": 970.9999561309814,
+          "avgChunkLoad": 2.7556812221353706
+        }
+      },
+      {
+        "run": 4,
+        "points": {
+          "gameHtmlStart": 6.0999999940395355,
+          "gameLoadStart": 15.799999997019768,
+          "gameReadyAt": 22319.19999998808,
+          "firstFrameAt": 22443.79999999702
+        },
+        "values": {
+          "loadScreenBoot": 9.700000002980232,
+          "loadingScreen": 22303.39999999106,
+          "loadingFirstFrame": 124.6000000089407,
+          "firstFrameDelta": 16.700000000000728,
+          "firstFps": 59.88023952095548,
+          "chunkLoadingTime": 21328.999996185303,
+          "renderCaching5": 927.0000457763672,
+          "avgChunkLoad": 2.633522857319225
+        }
+      },
+      {
+        "run": 5,
+        "points": {
+          "gameHtmlStart": 6,
+          "gameLoadStart": 17.200000002980232,
+          "gameReadyAt": 22653.89999999106,
+          "firstFrameAt": 22811.59999999404
+        },
+        "values": {
+          "loadScreenBoot": 11.200000002980232,
+          "loadingScreen": 22636.69999998808,
+          "loadingFirstFrame": 157.70000000298023,
+          "firstFrameDelta": 16.700000000000728,
+          "firstFps": 59.88023952095548,
+          "chunkLoadingTime": 21666.00012779236,
+          "renderCaching5": 922.0001697540283,
+          "avgChunkLoad": 2.6164779608899895
+        }
+      },
+      {
+        "run": 6,
+        "points": {
+          "gameHtmlStart": 7.0999999940395355,
+          "gameLoadStart": 17.799999997019768,
+          "gameReadyAt": 22801.09999999404,
+          "firstFrameAt": 22933
+        },
+        "values": {
+          "loadScreenBoot": 10.700000002980232,
+          "loadingScreen": 22783.29999999702,
+          "loadingFirstFrame": 131.90000000596046,
+          "firstFrameDelta": 16.600000000002183,
+          "firstFps": 60.24096385541377,
+          "chunkLoadingTime": 21750.999927520752,
+          "renderCaching5": 976.9999980926514,
+          "avgChunkLoad": 2.775568176399578
+        }
+      },
+      {
+        "run": 7,
+        "points": {
+          "gameHtmlStart": 6.200000002980232,
+          "gameLoadStart": 16,
+          "gameReadyAt": 22918.30000001192,
+          "firstFrameAt": 23059.90000000596
+        },
+        "values": {
+          "loadScreenBoot": 9.799999997019768,
+          "loadingScreen": 22902.30000001192,
+          "loadingFirstFrame": 141.59999999403954,
+          "firstFrameDelta": 16.599999999998545,
+          "firstFps": 60.24096385542697,
+          "chunkLoadingTime": 21904.00004386902,
+          "renderCaching5": 950.0000476837158,
+          "avgChunkLoad": 2.698863771828738
+        }
+      },
+      {
+        "run": 8,
+        "points": {
+          "gameHtmlStart": 5.5999999940395355,
+          "gameLoadStart": 16.5,
+          "gameReadyAt": 22897.20000000298,
+          "firstFrameAt": 23042.79999999702
+        },
+        "values": {
+          "loadScreenBoot": 10.900000005960464,
+          "loadingScreen": 22880.70000000298,
+          "loadingFirstFrame": 145.59999999403954,
+          "firstFrameDelta": 16.599999999998545,
+          "firstFps": 60.24096385542697,
+          "chunkLoadingTime": 21884.000062942505,
+          "renderCaching5": 949.0001201629639,
+          "avgChunkLoad": 2.696023068644784
+        }
+      },
+      {
+        "run": 9,
+        "points": {
+          "gameHtmlStart": 6.300000011920929,
+          "gameLoadStart": 17.80000001192093,
+          "gameReadyAt": 24167.40000000596,
+          "firstFrameAt": 24297.70000000298
+        },
+        "values": {
+          "loadScreenBoot": 11.5,
+          "loadingScreen": 24149.59999999404,
+          "loadingFirstFrame": 130.29999999701977,
+          "firstFrameDelta": 16.700000000000728,
+          "firstFps": 59.88023952095548,
+          "chunkLoadingTime": 22992.999792099,
+          "renderCaching5": 1098.0000495910645,
+          "avgChunkLoad": 3.116477619517933
+        }
+      },
+      {
+        "run": 10,
+        "points": {
+          "gameHtmlStart": 8.600000008940697,
+          "gameLoadStart": 18.5,
+          "gameReadyAt": 24155.10000000894,
+          "firstFrameAt": 24303.80000001192
+        },
+        "values": {
+          "loadScreenBoot": 9.899999991059303,
+          "loadingScreen": 24136.60000000894,
+          "loadingFirstFrame": 148.70000000298023,
+          "firstFrameDelta": 16.69999999999709,
+          "firstFps": 59.880239520968516,
+          "chunkLoadingTime": 22884.999990463257,
+          "renderCaching5": 1191.999912261963,
+          "avgChunkLoad": 3.3806819807399404
+        }
+      }
+    ]
+  },
+  "aggregates": {
+    "loadScreenBoot": {
+      "unit": "ms",
+      "count": 10,
+      "mean": 10.8,
+      "median": 10.800000004470348,
+      "p95": 12.284999992698431,
+      "min": 9.700000002980232,
+      "max": 12.599999994039536,
+      "stddev": 0.9560334697858845
+    },
+    "loadingScreen": {
+      "unit": "ms",
+      "count": 10,
+      "mean": 22936.430000001194,
+      "median": 22832,
+      "p95": 24143.750000000742,
+      "min": 22248.60000000894,
+      "max": 24149.59999999404,
+      "stddev": 647.7040343407439
+    },
+    "loadingFirstFrame": {
+      "unit": "ms",
+      "count": 10,
+      "mean": 139.98999999910592,
+      "median": 140.04999999701977,
+      "p95": 153.65000000298022,
+      "min": 124.6000000089407,
+      "max": 157.70000000298023,
+      "stddev": 9.12737092367488
+    },
+    "chunkLoadingTime": {
+      "unit": "ms",
+      "count": 10,
+      "mean": 21893.099975585938,
+      "median": 21817.49999523163,
+      "p95": 22944.399881362915,
+      "min": 21241.999864578247,
+      "max": 22992.999792099,
+      "stddev": 572.1115751590177
+    },
+    "renderCaching5": {
+      "unit": "ms",
+      "count": 10,
+      "mean": 989.1000270843506,
+      "median": 952.4999856948853,
+      "p95": 1149.6999740600586,
+      "min": 922.0001697540283,
+      "max": 1191.999912261963,
+      "stddev": 82.27322557985919
+    },
+    "avgChunkLoad": {
+      "unit": "ms",
+      "count": 10,
+      "mean": 2.8085228394378317,
+      "median": 2.7059658684513783,
+      "p95": 3.2617900181900366,
+      "min": 2.6164779608899895,
+      "max": 3.3806819807399404,
+      "stddev": 0.23225088992055848
+    },
+    "firstFrameDelta": {
+      "unit": "ms",
+      "count": 10,
+      "mean": 16.669999999999344,
+      "median": 16.69999999999709,
+      "p95": 16.700000000000728,
+      "min": 16.599999999998545,
+      "max": 16.700000000000728,
+      "stddev": 0.04582575694928848
+    },
+    "firstFps": {
+      "unit": "fps",
+      "count": 10,
+      "mean": 59.98845682129952,
+      "median": 59.880239520968516,
+      "p95": 60.24096385542697,
+      "min": 59.88023952095548,
+      "max": 60.24096385542697,
+      "stddev": 0.16530465676824055
+    }
+  }
+}

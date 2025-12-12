@@ -1,0 +1,13 @@
+{
+    "name": "droneforge-benchmark",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Load-time benchmark runner for Droneforge Web using Playwright.",
+    "scripts": {
+        "benchmark": "node run.js --"
+    },
+    "devDependencies": {
+        "playwright": "^1.41.2"
+    }
+}
+

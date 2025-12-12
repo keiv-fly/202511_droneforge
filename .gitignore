@@ -10,3 +10,10 @@ target/
 
 
 *.wasm
+
+# Node.js install artifacts
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+npm-debug.log*

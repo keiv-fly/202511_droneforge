@@ -2,6 +2,70 @@ const WASM_WEIGHT = 0.4;
 const CHUNK_WEIGHT = 0.6;
 const WASM_PATH = "droneforge-web.wasm";
 
+function createBenchMetrics() {
+    const htmlStart = window.gameHtmlStart || performance.now();
+    window.gameHtmlStart = htmlStart;
+    return {
+        gameHtmlStart: htmlStart,
+        gameLoadStart: null,
+        gameReadyAt: null,
+        firstFrameAt: null,
+        firstFrameDelta: null,
+        firstFps: null,
+        chunkLoadingTime: null,
+        renderCaching5: null,
+        avgChunkLoad: null,
+    };
+}
+
+function publishBenchMetrics(metrics) {
+    window.droneforgeMetrics = { ...metrics };
+}
+
+function readWasmMetric(fnName) {
+    const fn = wasm_exports?.[fnName];
+    if (typeof fn !== "function") {
+        return null;
+    }
+    const value = fn();
+    return Number.isFinite(value) ? value : null;
+}
+
+function captureReadyMetrics(state) {
+    state.metrics.chunkLoadingTime = readWasmMetric("bench_initial_chunk_cache_ms");
+    state.metrics.renderCaching5 = readWasmMetric("bench_initial_render_cache_ms");
+    state.metrics.avgChunkLoad = readWasmMetric("bench_avg_chunk_load_ms");
+    publishBenchMetrics(state.metrics);
+}
+
+function beginFirstFrameProbe(state) {
+    if (state.firstFrameProbeStarted) return;
+    state.firstFrameProbeStarted = true;
+
+    requestAnimationFrame((firstTimestamp) => {
+        const firstFrameAt = performance.now();
+        if (!state.metrics.firstFrameAt) {
+            state.metrics.firstFrameAt = firstFrameAt;
+            window.firstFrameAt = firstFrameAt;
+        }
+
+        requestAnimationFrame((secondTimestamp) => {
+            const delta = secondTimestamp - firstTimestamp;
+            if (!state.metrics.firstFrameDelta) {
+                state.metrics.firstFrameDelta = delta;
+                window.firstFrameDelta = delta;
+            }
+
+            if (!state.metrics.firstFps && delta > 0) {
+                state.metrics.firstFps = 1000 / delta;
+                window.firstFps = state.metrics.firstFps;
+            }
+
+            publishBenchMetrics(state.metrics);
+        });
+    });
+}
+
 function isMobile() {
     const ua = navigator.userAgent || navigator.vendor || window.opera;
     if (/android/i.test(ua)) return true;
@@ -76,6 +140,20 @@ function markReady(state, ui) {
     ui.progressDetail.textContent = "World cached. Press Start to play.";
     ui.startButton.disabled = false;
     ui.startButton.textContent = "Start";
+
+    if (!state.metrics.gameReadyAt) {
+        const readyAt = performance.now();
+        state.metrics.gameReadyAt = readyAt;
+        window.gameReadyAt = readyAt;
+    }
+
+    window.gameReady = true;
+
+    if (!state.metricsCaptured) {
+        state.metricsCaptured = true;
+        captureReadyMetrics(state);
+    }
+    publishBenchMetrics(state.metrics);
 
     if (state.startClicked) {
         ui.startScreen.style.display = "none";
@@ -198,6 +276,8 @@ async function startLoading(state, ui) {
 }
 
 window.addEventListener("load", () => {
+    window.gameReady = false;
+
     const ui = {
         startScreen: document.getElementById("start-screen"),
         startButton: document.getElementById("start-button"),
@@ -208,6 +288,8 @@ window.addEventListener("load", () => {
     };
 
     const state = {
+        metrics: createBenchMetrics(),
+        metricsCaptured: false,
         wasmProgress: 0,
         wasmLoadedBytes: 0,
         wasmTotalBytes: 0,
@@ -216,7 +298,12 @@ window.addEventListener("load", () => {
         chunkTotal: 0,
         ready: false,
         startClicked: false,
+        firstFrameProbeStarted: false,
     };
+
+    state.metrics.gameLoadStart = performance.now();
+    window.gameLoadStart = state.metrics.gameLoadStart;
+    publishBenchMetrics(state.metrics);
 
     updateProgressUI(state, ui, "Preparing download...");
     ui.startButton.disabled = true;
@@ -227,6 +314,7 @@ window.addEventListener("load", () => {
         ui.startButton.disabled = true;
         ui.startButton.textContent = "Loading…";
         await requestFullscreenIfMobile();
+        beginFirstFrameProbe(state);
 
         if (state.ready) {
             ui.startScreen.style.display = "none";
