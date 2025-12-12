@@ -318,30 +318,6 @@ impl GameState {
         self.chunk_cache.has_chunk(&base) && self.chunk_cache.has_chunk(&wall)
     }
 
-    fn render_ready_counts(&self) -> (usize, usize) {
-        let total = self
-            .render_chunk_xs
-            .len()
-            .saturating_mul(self.render_chunk_ys.len());
-        let mut ready = 0usize;
-
-        for &chunk_y in &self.render_chunk_ys {
-            for &chunk_x in &self.render_chunk_xs {
-                let key = RenderChunkKey {
-                    chunk_x,
-                    chunk_y,
-                    z: self.view_z,
-                };
-
-                if self.render_chunk_ready(&key) {
-                    ready = ready.saturating_add(1);
-                }
-            }
-        }
-
-        (ready, total)
-    }
-
     fn prime_chunk_cache_queue(&mut self) {
         let mut prioritized_levels = vec![0, 1];
         for dz in (-PRELOAD_Z_RADIUS)..=(PRELOAD_Z_RADIUS + 1) {
@@ -686,15 +662,6 @@ impl GameState {
             WHITE,
         );
 
-        let (render_ready, render_total) = self.render_ready_counts();
-        draw_text(
-            &format!("level ready z: {}/{}", render_ready, render_total),
-            20.0,
-            112.0,
-            24.0,
-            WHITE,
-        );
-
         let cache_avg_text = if self.chunk_cache_frame_time_count == 0 {
             "avg chunk cache: --".to_string()
         } else {
@@ -703,12 +670,12 @@ impl GameState {
                 self.chunk_cache_last_reported_avg_ms
             )
         };
-        draw_text(&cache_avg_text, 20.0, 136.0, 24.0, WHITE);
+        draw_text(&cache_avg_text, 20.0, 112.0, 24.0, WHITE);
 
         draw_text(
             &format!("zoom power: {}", self.zoom_power),
             20.0,
-            160.0,
+            136.0,
             24.0,
             WHITE,
         );
@@ -723,7 +690,7 @@ impl GameState {
         draw_text(
             &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
             20.0,
-            208.0,
+            160.0,
             24.0,
             WHITE,
         );
@@ -741,21 +708,21 @@ impl GameState {
                 center_tile_x, center_tile_y, self.view_z
             ),
             20.0,
+            184.0,
+            24.0,
+            WHITE,
+        );
+
+        draw_text(&format!("z: {}", self.view_z), 20.0, 208.0, 24.0, WHITE);
+        draw_text(
+            &format!("zoom: {:.2}x", normalized_zoom),
+            20.0,
             232.0,
             24.0,
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 256.0, 24.0, WHITE);
-        draw_text(
-            &format!("zoom: {:.2}x", normalized_zoom),
-            20.0,
-            280.0,
-            24.0,
-            WHITE,
-        );
-
-        draw_text(&format!("fps: {:.1}", self.fps), 20.0, 304.0, 24.0, WHITE);
+        draw_text(&format!("fps: {:.1}", self.fps), 20.0, 256.0, 24.0, WHITE);
     }
 
     fn apply_zoom_power_at_screen_pos(&mut self, next_zoom_power: i32, focus_screen_pos: Vec2) {
