@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="168" height="168" viewBox="66 16 168 168">
+  <!-- Circle centered in the image -->
+  <circle cx="150" cy="100" r="80" fill="none" stroke="black" stroke-width="8"/>
+
+  <!-- Line starting at the same place inside the circle, ending at the edge of the circle -->
+  <line x1="190" y1="100" x2="230" y2="100"
+        stroke="black" stroke-width="8" stroke-linecap="round"/>
+</svg>
+
