@@ -8,14 +8,14 @@ name = "d_gen_tileset"
 
 [features]
 default = ["generator"]
-generator = ["image"]
+generator = ["image", "roxmltree"]
 
 [dependencies]
 droneforge-core = { path = "../droneforge-core" }
 image = { version = "0.25", optional = true }
+roxmltree = { version = "0.20", optional = true }
 
 [[bin]]
 name = "d-gen-tileset"
 path = "src/main.rs"
 required-features = ["generator"]
-

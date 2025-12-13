@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="30 -20 240 240">
+  <!-- Circle centered in the image -->
+  <circle cx="150" cy="100" r="80" fill="white" stroke="black" stroke-width="16"/>
+
+  <!-- Line starting at the previous midpoint, same length -->
+  <line x1="190" y1="100" x2="270" y2="100"
+        stroke="black" stroke-width="16" stroke-linecap="butt"/>
+</svg>
+
