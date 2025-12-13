@@ -1,0 +1,21 @@
+[package]
+name = "d-gen-tileset"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "d_gen_tileset"
+
+[features]
+default = ["generator"]
+generator = ["image"]
+
+[dependencies]
+droneforge-core = { path = "../droneforge-core" }
+image = { version = "0.25", optional = true }
+
+[[bin]]
+name = "d-gen-tileset"
+path = "src/main.rs"
+required-features = ["generator"]
+

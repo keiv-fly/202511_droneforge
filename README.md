@@ -5,7 +5,14 @@ Plumbing to render a black canvas from Rust/macroquad compiled to WASM, with a t
 ## Workspace layout
 - `droneforge-core/`: core logic lib (`World` counter)
 - `droneforge-web/`: macroquad front-end, built as `cdylib` for wasm
+- `d-gen-tileset/`: utility to generate the shared tileset atlas
 - `web/`: static assets (`index.html`, `main.js`, `style.css`, wasm output later under `web/`)
+
+## Tileset atlas
+- Regenerate with `cargo run -p d-gen-tileset`.
+- Outputs `assets/tileset.png` (native) and `web/assets/tileset.png` (served with WASM).
+- Re-run after changing tile colors/layout so the game loads the refreshed atlas at runtime.
+- The PowerShell helper `run.ps1` builds the WASM, copies it into `web/`, and serves the folder on `http://127.0.0.1:8000/` (opens a browser; stop the server with its printed PID).
 
 ## Verify locally
 1) Desktop sanity check (quick):  
@@ -21,6 +28,9 @@ Plumbing to render a black canvas from Rust/macroquad compiled to WASM, with a t
 `cd web; simple-http-server .`  
 Then open the printed URL (e.g., `http://127.0.0.1:8000/`) to see the black canvas (and tick text).  
 (`web/index.html` already references the vendored `mq_js_bundle.js` from macroquad’s web.)
+
+5) Regenerate the tileset atlas after tile changes:  
+`cargo run -p d-gen-tileset`
 
 ## Prereqs
 - `rustup target add wasm32-unknown-unknown`

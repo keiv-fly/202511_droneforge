@@ -1,3 +1,4 @@
+use d_gen_tileset::layout::{self, MASK_EAST, MASK_NORTH, MASK_SOUTH, MASK_WEST};
 use droneforge_core::chunk::CHUNK_HEIGHT;
 use droneforge_core::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
 use droneforge_core::{AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, World, WorldCoord};
@@ -13,7 +14,8 @@ const VIEW_MIN_Y: i32 = -60;
 const VIEW_MAX_Y: i32 = 60;
 const DEFAULT_VIEW_Z: i32 = 0;
 
-const BLOCK_PIXEL_SIZE: u16 = 16;
+const BLOCK_PIXEL_SIZE: u16 = layout::BLOCK_PIXEL_SIZE as u16;
+const TILESET_PATH: &str = "assets/tileset.png";
 const BASE_ZOOM_AT_POWER_ZERO: f32 = 1f32;
 const MIN_ZOOM_POWER: i32 = -48;
 const MAX_ZOOM_POWER: i32 = 15;
@@ -28,11 +30,6 @@ static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 
 static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
 static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
-
-const MASK_NORTH: u8 = 1;
-const MASK_EAST: u8 = 2;
-const MASK_SOUTH: u8 = 4;
-const MASK_WEST: u8 = 8;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn z_level_up() {
@@ -103,6 +100,21 @@ struct RenderedLevelCache {
     texture: Texture2D,
 }
 
+#[derive(Clone, Copy)]
+struct TileRegion {
+    pixel_x: u32,
+    pixel_y: u32,
+}
+
+impl TileRegion {
+    fn from_tile_position(position: layout::TilePosition) -> Self {
+        Self {
+            pixel_x: position.tile_x.saturating_mul(layout::BLOCK_PIXEL_SIZE),
+            pixel_y: position.tile_y.saturating_mul(layout::BLOCK_PIXEL_SIZE),
+        }
+    }
+}
+
 struct BlockPalette;
 
 impl BlockPalette {
@@ -125,61 +137,55 @@ struct WallTileKey {
 }
 
 struct TileSet {
-    floor_tiles: HashMap<BlockId, Image>,
-    wall_tiles: HashMap<WallTileKey, Image>,
+    atlas: Image,
+    floor_tiles: HashMap<BlockId, TileRegion>,
+    wall_tiles: HashMap<WallTileKey, TileRegion>,
 }
 
 impl TileSet {
-    fn new(palette: &BlockPalette) -> Self {
+    async fn load_from_assets() -> Self {
+        let atlas = load_image(TILESET_PATH)
+            .await
+            .unwrap_or_else(|err| panic!("failed to load tileset at {TILESET_PATH}: {err}"));
+        Self::from_atlas(atlas)
+    }
+
+    fn from_atlas(atlas: Image) -> Self {
         let mut floor_tiles = HashMap::new();
         let mut wall_tiles = HashMap::new();
 
-        let solid_blocks: &[BlockId] = &[
-            droneforge_core::DIRT,
-            droneforge_core::STONE,
-            droneforge_core::IRON,
-            BEDROCK,
-        ];
+        for &block in layout::SOLID_BLOCKS.iter() {
+            if let Some(position) = layout::floor_tile_position(block) {
+                floor_tiles.insert(block, TileRegion::from_tile_position(position));
+            }
 
-        for &block in solid_blocks {
-            let mut img = Image::gen_image_color(
-                BLOCK_PIXEL_SIZE.into(),
-                BLOCK_PIXEL_SIZE.into(),
-                Color::from_rgba(0, 0, 0, 0),
-            );
-            fill_block(&mut img, 0, 0, palette.color_for(block));
-            floor_tiles.insert(block, img);
-        }
-
-        for &block in solid_blocks {
-            let source_color = palette.color_for(block);
-            let base_color = wall_base_tint(source_color);
-            let edge_color = wall_edge_tint(source_color);
-
-            for mask in 0u8..16 {
-                let mut img = Image::gen_image_color(
-                    BLOCK_PIXEL_SIZE.into(),
-                    BLOCK_PIXEL_SIZE.into(),
-                    Color::from_rgba(0, 0, 0, 0),
-                );
-                draw_wall_overlay(&mut img, 0, 0, base_color, edge_color, mask);
-                draw_wall_outline(&mut img, 0, 0, mask);
-                wall_tiles.insert(WallTileKey { block, mask }, img);
+            for mask in 0u8..(layout::WALL_MASK_VARIANTS as u8) {
+                if let Some(position) = layout::wall_tile_position(block, mask) {
+                    wall_tiles.insert(
+                        WallTileKey { block, mask },
+                        TileRegion::from_tile_position(position),
+                    );
+                }
             }
         }
 
         Self {
+            atlas,
             floor_tiles,
             wall_tiles,
         }
     }
 
-    fn floor_image(&self, block: BlockId) -> Option<&Image> {
+    fn floor_region(&self, block: BlockId) -> Option<&TileRegion> {
         self.floor_tiles.get(&block)
     }
 
-    fn wall_image(&self, block: BlockId, mask: u8) -> Option<&Image> {
+    fn wall_region(&self, block: BlockId, mask: u8) -> Option<&TileRegion> {
         self.wall_tiles.get(&WallTileKey { block, mask })
+    }
+
+    fn atlas(&self) -> &Image {
+        &self.atlas
     }
 }
 
@@ -220,21 +226,22 @@ pub struct GameState {
 }
 
 impl GameState {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
+        let tiles = TileSet::load_from_assets().await;
         let generator = DeterministicMap::new(42);
         let cache_capacity =
             ChunkCache::chunk_count_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT).max(1);
         let chunk_cache = ChunkCache::with_capacity(cache_capacity);
-        Self::build(generator, chunk_cache)
+        Self::build(generator, chunk_cache, tiles)
     }
 
-    pub fn new_with_cache(generator: DeterministicMap, chunk_cache: ChunkCache) -> Self {
-        Self::build(generator, chunk_cache)
+    pub async fn new_with_cache(generator: DeterministicMap, chunk_cache: ChunkCache) -> Self {
+        let tiles = TileSet::load_from_assets().await;
+        Self::build(generator, chunk_cache, tiles)
     }
 
-    fn build(generator: DeterministicMap, chunk_cache: ChunkCache) -> Self {
+    fn build(generator: DeterministicMap, chunk_cache: ChunkCache, tiles: TileSet) -> Self {
         let initial_zoom_power = 0;
-        let palette = BlockPalette;
         let (render_chunk_xs, render_chunk_ys) =
             render_chunk_ranges(VIEW_MIN_X, VIEW_MAX_X, VIEW_MIN_Y, VIEW_MAX_Y);
         let (world_chunk_xs, world_chunk_ys, world_chunk_zs) =
@@ -243,7 +250,6 @@ impl GameState {
         let (chunk_width_px, chunk_depth_px) = render_chunk_pixel_dimensions();
         let scratch_image =
             Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
-        let tiles = TileSet::new(&palette);
         let mut game = Self {
             world: World::new(),
             chunk_cache,
@@ -522,22 +528,46 @@ impl GameState {
                                 let mask =
                                     wall_edge_mask(&self.chunk_cache, world_x, world_y, z_wall);
 
-                                if let Some(tile) = self.tiles.wall_image(upper_block, mask) {
-                                    blit_tile(&mut self.scratch_image, tile, dst_x, dst_y);
-                                } else if let Some(tile) = self.tiles.floor_image(block) {
-                                    blit_tile(&mut self.scratch_image, tile, dst_x, dst_y);
+                                if let Some(tile) = self.tiles.wall_region(upper_block, mask) {
+                                    blit_tile_region(
+                                        &mut self.scratch_image,
+                                        self.tiles.atlas(),
+                                        tile,
+                                        dst_x,
+                                        dst_y,
+                                    );
+                                } else if let Some(tile) = self.tiles.floor_region(block) {
+                                    blit_tile_region(
+                                        &mut self.scratch_image,
+                                        self.tiles.atlas(),
+                                        tile,
+                                        dst_x,
+                                        dst_y,
+                                    );
                                 } else {
                                     let color = palette.color_for(block);
                                     fill_block(&mut self.scratch_image, dst_x, dst_y, color);
                                 }
-                            } else if let Some(tile) = self.tiles.floor_image(block) {
-                                blit_tile(&mut self.scratch_image, tile, dst_x, dst_y);
+                            } else if let Some(tile) = self.tiles.floor_region(block) {
+                                blit_tile_region(
+                                    &mut self.scratch_image,
+                                    self.tiles.atlas(),
+                                    tile,
+                                    dst_x,
+                                    dst_y,
+                                );
                             } else {
                                 let color = palette.color_for(block);
                                 fill_block(&mut self.scratch_image, dst_x, dst_y, color);
                             }
-                        } else if let Some(tile) = self.tiles.floor_image(block) {
-                            blit_tile(&mut self.scratch_image, tile, dst_x, dst_y);
+                        } else if let Some(tile) = self.tiles.floor_region(block) {
+                            blit_tile_region(
+                                &mut self.scratch_image,
+                                self.tiles.atlas(),
+                                tile,
+                                dst_x,
+                                dst_y,
+                            );
                         } else {
                             let color = palette.color_for(block);
                             fill_block(&mut self.scratch_image, dst_x, dst_y, color);
@@ -617,10 +647,12 @@ impl GameState {
                 let screen_y = (world_origin_y - VIEW_MIN_Y) as f32 * effective_block_size
                     + self.camera_offset_y;
 
-                let blocks_w =
-                    rendered_level.chunks_x as f32 * RENDER_CHUNK_SIZE as f32 * effective_block_size;
-                let blocks_h =
-                    rendered_level.chunks_y as f32 * RENDER_CHUNK_SIZE as f32 * effective_block_size;
+                let blocks_w = rendered_level.chunks_x as f32
+                    * RENDER_CHUNK_SIZE as f32
+                    * effective_block_size;
+                let blocks_h = rendered_level.chunks_y as f32
+                    * RENDER_CHUNK_SIZE as f32
+                    * effective_block_size;
 
                 draw_texture_ex(
                     &rendered_level.texture,
@@ -845,12 +877,6 @@ impl GameState {
     }
 }
 
-impl Default for GameState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 fn fill_block(image: &mut Image, block_x: usize, block_y: usize, color: Color) {
     let pixel_x = block_x as u32 * BLOCK_PIXEL_SIZE as u32;
     let pixel_y = block_y as u32 * BLOCK_PIXEL_SIZE as u32;
@@ -862,23 +888,21 @@ fn fill_block(image: &mut Image, block_x: usize, block_y: usize, color: Color) {
     }
 }
 
-fn blit_tile(dst: &mut Image, tile: &Image, tile_x: usize, tile_y: usize) {
+fn blit_tile_region(
+    dst: &mut Image,
+    atlas: &Image,
+    region: &TileRegion,
+    tile_x: usize,
+    tile_y: usize,
+) {
     let size = BLOCK_PIXEL_SIZE as u32;
     let dst_x0 = tile_x as u32 * size;
     let dst_y0 = tile_y as u32 * size;
 
     for dy in 0..size {
         for dx in 0..size {
-            let color = tile.get_pixel(dx, dy);
+            let color = atlas.get_pixel(region.pixel_x + dx, region.pixel_y + dy);
             dst.set_pixel(dst_x0 + dx, dst_y0 + dy, color);
-        }
-    }
-}
-
-fn fill_rect(image: &mut Image, start_x: u32, start_y: u32, width: u32, height: u32, color: Color) {
-    for dy in 0..height {
-        for dx in 0..width {
-            image.set_pixel(start_x + dx, start_y + dy, color);
         }
     }
 }
@@ -939,173 +963,13 @@ fn wall_edge_mask(cache: &ChunkCache, x: i32, y: i32, z: i32) -> u8 {
     mask
 }
 
-fn apply_saturation_and_brightness(color: Color, saturation: f32, brightness: f32) -> Color {
-    let intensity = (color.r + color.g + color.b) / 3.0;
-    let adjust = |channel: f32| -> f32 {
-        let saturated = intensity + (channel - intensity) * saturation;
-        (saturated * brightness).clamp(0.0, 1.0)
-    };
-
-    Color {
-        r: adjust(color.r),
-        g: adjust(color.g),
-        b: adjust(color.b),
-        a: color.a,
-    }
-}
-
-fn wall_base_tint(color: Color) -> Color {
-    apply_saturation_and_brightness(color, 1.25, 0.2)
-}
-
-fn wall_edge_tint(color: Color) -> Color {
-    apply_saturation_and_brightness(color, 1.2, 1.15)
-}
-
-fn wall_outline_thickness(size: u32) -> u32 {
-    (size / 16).max(1)
-}
-
-fn wall_rim_thickness(size: u32) -> u32 {
-    // Keep rim + outline at 1/4 of the block, with outline outermost.
-    let target_total = (size / 4).max(1);
-    let outline = wall_outline_thickness(size);
-    target_total.saturating_sub(outline).max(1)
-}
-
-fn draw_wall_overlay(
-    image: &mut Image,
-    block_x: usize,
-    block_y: usize,
-    base_color: Color,
-    edge_color: Color,
-    mask: u8,
-) {
-    fill_block(image, block_x, block_y, base_color);
-
-    let size = BLOCK_PIXEL_SIZE as u32;
-    let start_x = block_x as u32 * size;
-    let start_y = block_y as u32 * size;
-    let outline_thickness = wall_outline_thickness(size);
-    let rim_thickness = wall_rim_thickness(size); // rim + outline = 1/4 block
-
-    // Keep the bright rim just inside the outermost outline so black can be outermost.
-    // For north/south we inset by the outline thickness on Y; for east/west on X.
-    let north_y = start_y + outline_thickness;
-    let south_y = start_y + size.saturating_sub(outline_thickness + rim_thickness);
-    let west_x = start_x + outline_thickness;
-    let east_x = start_x + size.saturating_sub(outline_thickness + rim_thickness);
-
-    if mask & MASK_NORTH != 0 {
-        fill_rect(image, start_x, north_y, size, rim_thickness, edge_color);
-    }
-
-    if mask & MASK_EAST != 0 {
-        fill_rect(image, east_x, start_y, rim_thickness, size, edge_color);
-    }
-
-    if mask & MASK_SOUTH != 0 {
-        fill_rect(image, start_x, south_y, size, rim_thickness, edge_color);
-    }
-
-    if mask & MASK_WEST != 0 {
-        fill_rect(image, west_x, start_y, rim_thickness, size, edge_color);
-    }
-}
-
-fn draw_wall_outline(image: &mut Image, block_x: usize, block_y: usize, mask: u8) {
-    if mask == 0 {
-        return;
-    }
-
-    let size = BLOCK_PIXEL_SIZE as u32;
-    // Outer black outline thickness: 1/16 of block (same fraction as before), min 1px.
-    let outline_thickness = wall_outline_thickness(size);
-    let start_x = block_x as u32 * size;
-    let start_y = block_y as u32 * size;
-
-    if mask & MASK_NORTH != 0 {
-        fill_rect(image, start_x, start_y, size, outline_thickness, BLACK);
-    }
-
-    if mask & MASK_EAST != 0 {
-        fill_rect(
-            image,
-            start_x + size.saturating_sub(outline_thickness),
-            start_y,
-            outline_thickness,
-            size,
-            BLACK,
-        );
-    }
-
-    if mask & MASK_SOUTH != 0 {
-        fill_rect(
-            image,
-            start_x,
-            start_y + size.saturating_sub(outline_thickness),
-            size,
-            outline_thickness,
-            BLACK,
-        );
-    }
-
-    if mask & MASK_WEST != 0 {
-        fill_rect(image, start_x, start_y, outline_thickness, size, BLACK);
-    }
-
-    if mask & MASK_NORTH != 0 && mask & MASK_WEST != 0 {
-        fill_rect(
-            image,
-            start_x,
-            start_y,
-            outline_thickness,
-            outline_thickness,
-            BLACK,
-        );
-    }
-
-    if mask & MASK_NORTH != 0 && mask & MASK_EAST != 0 {
-        fill_rect(
-            image,
-            start_x + size.saturating_sub(outline_thickness),
-            start_y,
-            outline_thickness,
-            outline_thickness,
-            BLACK,
-        );
-    }
-
-    if mask & MASK_SOUTH != 0 && mask & MASK_WEST != 0 {
-        fill_rect(
-            image,
-            start_x,
-            start_y + size.saturating_sub(outline_thickness),
-            outline_thickness,
-            outline_thickness,
-            BLACK,
-        );
-    }
-
-    if mask & MASK_SOUTH != 0 && mask & MASK_EAST != 0 {
-        fill_rect(
-            image,
-            start_x + size.saturating_sub(outline_thickness),
-            start_y + size.saturating_sub(outline_thickness),
-            outline_thickness,
-            outline_thickness,
-            BLACK,
-        );
-    }
-}
-
 pub async fn run() {
     install_panic_hook();
     let generator = DeterministicMap::new(42);
     let cache_capacity =
         ChunkCache::chunk_count_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT).max(1);
     let chunk_cache = ChunkCache::with_capacity(cache_capacity);
-    let mut game = GameState::new_with_cache(generator, chunk_cache);
+    let mut game = GameState::new_with_cache(generator, chunk_cache).await;
     game.initialize_camera_center();
     let mut accumulator = 0.0_f32;
     let fixed_step = 1.0_f32 / 60.0_f32; // 60 Hz simulation

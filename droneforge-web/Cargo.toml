@@ -14,3 +14,4 @@ path = "src/main.rs"
 [dependencies]
 macroquad = "0.4"
 droneforge-core = { path = "../droneforge-core" }
+d-gen-tileset = { path = "../d-gen-tileset", default-features = false }

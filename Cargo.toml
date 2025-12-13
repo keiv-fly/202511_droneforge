@@ -2,5 +2,6 @@
 members = [
     "droneforge-core",
     "droneforge-web",
+    "d-gen-tileset",
 ]
 resolver = "2"
