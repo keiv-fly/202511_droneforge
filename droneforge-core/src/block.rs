@@ -22,3 +22,27 @@ impl Block {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructs_block_with_provided_fields() {
+        let block = Block::new(DIRT, "Dirt");
+
+        assert_eq!(block.id, DIRT);
+        assert_eq!(block.name, "Dirt");
+    }
+
+    #[test]
+    fn serde_round_trip_preserves_block() {
+        let original = Block::new(IRON, "Iron");
+
+        let serialized = serde_json::to_string(&original).expect("serialization should succeed");
+        let restored: Block =
+            serde_json::from_str(&serialized).expect("deserialization should succeed");
+
+        assert_eq!(restored, original);
+    }
+}
