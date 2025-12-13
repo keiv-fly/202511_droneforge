@@ -25,3 +25,26 @@ pub fn expected_block_count(width: usize, depth: usize, height: usize) -> usize 
 pub fn default_block_count() -> usize {
     expected_block_count(CHUNK_WIDTH, CHUNK_DEPTH, CHUNK_HEIGHT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn storage_error_wraps_message() {
+        let error = StorageError::new("failed to load");
+        assert_eq!(error.0, "failed to load");
+    }
+
+    #[test]
+    fn expected_block_count_multiplies_dimensions() {
+        assert_eq!(expected_block_count(2, 3, 4), 24);
+        assert_eq!(expected_block_count(1, 1, 1), 1);
+    }
+
+    #[test]
+    fn default_block_count_matches_chunk_constants() {
+        let expected = CHUNK_WIDTH * CHUNK_DEPTH * CHUNK_HEIGHT;
+        assert_eq!(default_block_count(), expected);
+    }
+}
