@@ -372,4 +372,64 @@ mod tests {
         let expected = generator.block_at(coord);
         assert_eq!(cache.block_at_world(coord), Some(expected));
     }
+
+    #[test]
+    fn palette_builds_unique_ids_in_order() {
+        let blocks = vec![AIR, DIRT, AIR, STONE, DIRT];
+        let (palette, indices) = build_palette(&blocks);
+
+        assert_eq!(palette, vec![AIR, DIRT, STONE]);
+        assert_eq!(indices[&AIR], 0);
+        assert_eq!(indices[&DIRT], 1);
+        assert_eq!(indices[&STONE], 2);
+    }
+
+    #[test]
+    fn bits_required_matches_palette_size() {
+        assert_eq!(bits_required(0), 0);
+        assert_eq!(bits_required(1), 0);
+        assert_eq!(bits_required(2), 1);
+        assert_eq!(bits_required(3), 2);
+        assert_eq!(bits_required(4), 2);
+    }
+
+    #[test]
+    fn pack_and_unpack_restore_palette_indices() {
+        let blocks: Vec<BlockId> = vec![AIR, DIRT, STONE, IRON, STONE, DIRT, AIR, IRON];
+        let (palette, indices) = build_palette(&blocks);
+        let bits_per_index = bits_required(palette.len());
+        let packed = pack_blocks(&blocks, &indices, bits_per_index);
+
+        for (i, original) in blocks.iter().enumerate() {
+            let palette_index = unpack_index(&packed, i, bits_per_index);
+            let restored = palette[palette_index as usize];
+            assert_eq!(restored, *original);
+        }
+    }
+
+    #[test]
+    fn chunk_and_local_calculations_cover_negative_world_coords() {
+        let world = WorldCoord::new(-1, -1, -1);
+        let (chunk_pos, local) = chunk_and_local_for_world_coord(world);
+
+        assert_eq!(chunk_pos, ChunkPosition::new(-1, -1, -1));
+        assert_eq!(
+            local,
+            LocalBlockCoord::new(CHUNK_WIDTH - 1, CHUNK_DEPTH - 1, CHUNK_HEIGHT - 1)
+        );
+    }
+
+    #[test]
+    fn chunk_count_matches_ranges() {
+        let horizontal_limit = CHUNK_WIDTH as i32; // produces three chunk positions (-1, 0, 1)
+        let vertical_limit = CHUNK_HEIGHT as i32; // produces three chunk positions (-1, 0, 1)
+
+        let (xs, ys, zs) = ChunkCache::chunk_ranges_for_limits(horizontal_limit, vertical_limit);
+        let expected = xs.len() * ys.len() * zs.len();
+
+        assert_eq!(
+            ChunkCache::chunk_count_for_limits(horizontal_limit, vertical_limit),
+            expected
+        );
+    }
 }

@@ -164,9 +164,10 @@ mod tests {
     #[test]
     fn stone_above_ground_follows_diagonal_rule() {
         let generator = map();
-        assert_eq!(generator.block_at(WorldCoord::new(1, 3, 3)), STONE);
-        assert_eq!(generator.block_at(WorldCoord::new(1, 2, 3)), AIR);
-        assert_eq!(generator.block_at(WorldCoord::new(-1, 3, 3)), AIR);
+        // For z > 0 the area where x - z + 1 > 0 should contain stone, otherwise air.
+        assert_eq!(generator.block_at(WorldCoord::new(4, 0, 2)), STONE);
+        assert_eq!(generator.block_at(WorldCoord::new(1, 0, 3)), AIR);
+        assert_eq!(generator.block_at(WorldCoord::new(-1, 0, 3)), AIR);
     }
 
     #[test]

@@ -126,4 +126,38 @@ mod tests {
             Err(ChunkError::InvalidBlockCount(_))
         ));
     }
+
+    #[test]
+    fn block_index_rejects_out_of_bounds_coordinates() {
+        let too_far_x = LocalBlockCoord::new(CHUNK_WIDTH, 0, 0);
+        assert!(matches!(
+            Chunk::block_index(too_far_x),
+            Err(ChunkError::OutOfBounds)
+        ));
+
+        let too_far_y = LocalBlockCoord::new(0, CHUNK_DEPTH, 0);
+        assert!(matches!(
+            Chunk::block_index(too_far_y),
+            Err(ChunkError::OutOfBounds)
+        ));
+
+        let too_far_z = LocalBlockCoord::new(0, 0, CHUNK_HEIGHT);
+        assert!(matches!(
+            Chunk::block_index(too_far_z),
+            Err(ChunkError::OutOfBounds)
+        ));
+    }
+
+    #[test]
+    fn chunk_blocks_constructor_validates_length() {
+        let position = ChunkPosition::new(0, 0, 0);
+        let valid = vec![1u16; CHUNK_WIDTH * CHUNK_DEPTH * CHUNK_HEIGHT];
+        assert!(ChunkBlocks::new(position, valid).is_ok());
+
+        let invalid = vec![1u16; CHUNK_WIDTH * CHUNK_DEPTH * CHUNK_HEIGHT - 1];
+        assert!(matches!(
+            ChunkBlocks::new(position, invalid),
+            Err(ChunkError::InvalidBlockCount(_))
+        ));
+    }
 }
