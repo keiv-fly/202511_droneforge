@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="54 4 192 192">
+  <!-- Circle centered in the image with doubled stroke width -->
+  <circle cx="150" cy="100" r="80" fill="white" stroke="black" stroke-width="32"/>
+
+  <!-- Line starting at 2/3 of the diameter from the left edge and extending to the circle -->
+  <line x1="176.67" y1="100" x2="230" y2="100"
+        stroke="black" stroke-width="32" stroke-linecap="round"/>
+</svg>
+
+

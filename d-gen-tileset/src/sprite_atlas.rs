@@ -237,11 +237,7 @@ fn render_atlas(specs: &[DroneSpec], target_size: u32) -> RgbaImage {
     let columns = DIRECTION_ROTATIONS.len() as u32;
     let rows = specs.len() as u32;
     let stride = target_size + SPRITE_PADDING * 2;
-    let mut atlas = RgbaImage::from_pixel(
-        columns * stride,
-        rows * stride,
-        Rgba([0, 0, 0, 0]),
-    );
+    let mut atlas = RgbaImage::from_pixel(columns * stride, rows * stride, Rgba([0, 0, 0, 0]));
 
     for (row, spec) in specs.iter().enumerate() {
         for (col, rotation) in DIRECTION_ROTATIONS.iter().copied().enumerate() {

@@ -1,13 +1,16 @@
 use d_gen_tileset::layout::{self, MASK_EAST, MASK_NORTH, MASK_SOUTH, MASK_WEST};
 use droneforge_core::chunk::CHUNK_HEIGHT;
 use droneforge_core::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
-use droneforge_core::{AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, World, WorldCoord};
+use droneforge_core::{
+    AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, DronePose, World, WorldCoord,
+};
 #[cfg(target_arch = "wasm32")]
 use macroquad::miniquad;
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
+use crate::drone::{draw_drone, drone_world_center, is_visible_at_view, DroneDrawConfig};
 const VIEW_MIN_X: i32 = -100;
 const VIEW_MAX_X: i32 = 100;
 const VIEW_MIN_Y: i32 = -60;
@@ -25,6 +28,8 @@ const BASE_ZOOM_AT_POWER_ZERO: f32 = 1f32;
 const MIN_ZOOM_POWER: i32 = -48;
 const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
+
+mod drone;
 
 const RENDER_CHUNK_SIZE: i32 = 32;
 const PRELOAD_Z_RADIUS: i32 = 5;
@@ -283,6 +288,7 @@ pub struct GameState {
     generator: DeterministicMap,
     tiles: TileSet,
     drone_sprites: DroneSpriteAtlas,
+    drone_draw: DroneDrawConfig,
     scratch_image: Image,
     rendered_level: Option<RenderedLevelCache>,
     rendered_level_dirty: bool,
@@ -346,12 +352,15 @@ impl GameState {
         let (chunk_width_px, chunk_depth_px) = render_chunk_pixel_dimensions();
         let scratch_image =
             Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
+        let mut world = World::new();
+        world.set_drones(vec![DronePose::new([0.0, -1.0, 1.0], [1.0, 0.0])]);
         let mut game = Self {
-            world: World::new(),
+            world,
             chunk_cache,
             generator,
             tiles,
             drone_sprites,
+            drone_draw: DroneDrawConfig::default(),
             scratch_image,
             rendered_level: None,
             rendered_level_dirty: true,
@@ -397,6 +406,14 @@ impl GameState {
     fn world_to_screen(&self, world_x: i32, world_y: i32, effective_block_size: f32) -> Vec2 {
         let screen_x = (world_x - VIEW_MIN_X) as f32 * effective_block_size + self.camera_offset_x;
         let screen_y = (world_y - VIEW_MIN_Y) as f32 * effective_block_size + self.camera_offset_y;
+        vec2(screen_x, screen_y)
+    }
+
+    fn world_to_screen_f(&self, world: Vec2, effective_block_size: f32) -> Vec2 {
+        let screen_x =
+            (world.x - VIEW_MIN_X as f32) * effective_block_size + self.camera_offset_x;
+        let screen_y =
+            (world.y - VIEW_MIN_Y as f32) * effective_block_size + self.camera_offset_y;
         vec2(screen_x, screen_y)
     }
 
@@ -750,10 +767,8 @@ impl GameState {
                 let world_origin_x = rendered_level.origin_chunk_x * RENDER_CHUNK_SIZE;
                 let world_origin_y = rendered_level.origin_chunk_y * RENDER_CHUNK_SIZE;
 
-                let screen_x = (world_origin_x - VIEW_MIN_X) as f32 * effective_block_size
-                    + self.camera_offset_x;
-                let screen_y = (world_origin_y - VIEW_MIN_Y) as f32 * effective_block_size
-                    + self.camera_offset_y;
+                let origin_screen =
+                    self.world_to_screen(world_origin_x, world_origin_y, effective_block_size);
 
                 let blocks_w = rendered_level.chunks_x as f32
                     * RENDER_CHUNK_SIZE as f32
@@ -764,8 +779,8 @@ impl GameState {
 
                 draw_texture_ex(
                     &rendered_level.texture,
-                    screen_x,
-                    screen_y,
+                    origin_screen.x,
+                    origin_screen.y,
                     WHITE,
                     DrawTextureParams {
                         dest_size: Some(vec2(blocks_w, blocks_h)),
@@ -774,6 +789,8 @@ impl GameState {
                 );
             }
         }
+
+        self.render_drones(effective_block_size);
 
         draw_text(
             &format!("tick: {}", self.world.tick),
@@ -835,28 +852,6 @@ impl GameState {
             WHITE,
         );
 
-        // Draw a placeholder drone sprite from z + 1 onto the current render level so it is visible at startup.
-        if self.view_z + 1 == 1 {
-            if let Some(source) = self.drone_sprites.source_rect(2, 1) {
-                let base = self.world_to_screen(0, -1, effective_block_size);
-                let dest_size = vec2(effective_block_size, effective_block_size);
-                let draw_x = base.x;
-                let draw_y = base.y;
-
-                draw_texture_ex(
-                    self.drone_sprites.texture(),
-                    draw_x,
-                    draw_y,
-                    WHITE,
-                    DrawTextureParams {
-                        dest_size: Some(dest_size),
-                        source: Some(source),
-                        ..Default::default()
-                    },
-                );
-            }
-        }
-
         let screen_center_x = screen_width() / 2.0;
         let screen_center_y = screen_height() / 2.0;
         let center_tile_x = (((screen_center_x - self.camera_offset_x) / effective_block_size)
@@ -885,6 +880,18 @@ impl GameState {
         );
 
         draw_text(&format!("fps: {:.1}", self.fps), 20.0, 256.0, 24.0, WHITE);
+    }
+
+    fn render_drones(&self, effective_block_size: f32) {
+        for drone in self.world.drones() {
+            if !is_visible_at_view(drone, self.view_z) {
+                continue;
+            }
+
+            let center_world = drone_world_center(drone);
+            let center_screen = self.world_to_screen_f(center_world, effective_block_size);
+            draw_drone(drone, center_screen, effective_block_size, &self.drone_draw);
+        }
     }
 
     fn apply_zoom_power_at_screen_pos(&mut self, next_zoom_power: i32, focus_screen_pos: Vec2) {

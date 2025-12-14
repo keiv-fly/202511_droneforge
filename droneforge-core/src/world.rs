@@ -1,6 +1,7 @@
 use crate::block::BlockId;
 use crate::chunk::{Chunk, ChunkBlocks, ChunkError};
 use crate::coordinates::{ChunkPosition, LocalBlockCoord};
+use crate::drone::DronePose;
 use crate::storage::{LoadBlocksFn, SaveBlocksFn, StorageError};
 use crate::worldgen::DeterministicMap;
 use std::collections::HashMap;
@@ -8,6 +9,7 @@ use std::collections::HashMap;
 pub struct World {
     pub tick: u64,
     chunks: HashMap<ChunkPosition, Chunk>,
+    drones: Vec<DronePose>,
     save_blocks: SaveBlocksFn,
     load_blocks: LoadBlocksFn,
 }
@@ -21,6 +23,7 @@ impl World {
         Self {
             tick: 0,
             chunks: HashMap::new(),
+            drones: Vec::new(),
             save_blocks,
             load_blocks,
         }
@@ -28,6 +31,18 @@ impl World {
 
     pub fn step(&mut self) {
         self.tick += 1;
+    }
+
+    pub fn drones(&self) -> &[DronePose] {
+        &self.drones
+    }
+
+    pub fn set_drones(&mut self, drones: Vec<DronePose>) {
+        self.drones = drones;
+    }
+
+    pub fn add_drone(&mut self, drone: DronePose) {
+        self.drones.push(drone);
     }
 
     pub fn register_chunk(&mut self, position: ChunkPosition, default_block: BlockId) {
