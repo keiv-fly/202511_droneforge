@@ -3,10 +3,10 @@ use macroquad::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct DroneDrawConfig {
-    pub radius_tiles: f32,        // inner radius before stroke
-    pub stroke_ratio: f32,        // stroke width as a fraction of radius
-    pub line_start_ratio: f32,    // where the line begins, fraction of radius
-    pub line_length_ratio: f32,   // line length as a fraction of radius
+    pub radius_tiles: f32,         // inner radius before stroke
+    pub stroke_ratio: f32,         // stroke width as a fraction of radius
+    pub line_start_ratio: f32,     // where the line begins, fraction of radius
+    pub line_length_ratio: f32,    // line length as a fraction of radius
     pub line_thickness_ratio: f32, // line thickness as a fraction of radius
     pub stroke_color: Color,
     pub fill_color: Color,
@@ -16,7 +16,7 @@ impl Default for DroneDrawConfig {
     fn default() -> Self {
         Self {
             radius_tiles: 0.4,
-            stroke_ratio: 0.4,       // matches drone7.svg: 32px stroke over 80px radius
+            stroke_ratio: 0.4, // matches drone7.svg: 32px stroke over 80px radius
             line_start_ratio: 1.0 / 3.0,
             line_length_ratio: 2.0 / 3.0,
             line_thickness_ratio: 0.4,
@@ -96,4 +96,3 @@ pub fn draw_drone(
         config.stroke_color,
     );
 }
-

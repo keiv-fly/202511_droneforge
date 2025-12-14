@@ -8,9 +8,11 @@ use droneforge_core::{
 use macroquad::miniquad;
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ptr;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 
-use crate::drone::{draw_drone, drone_world_center, is_visible_at_view, DroneDrawConfig};
+use crate::drone::{DroneDrawConfig, draw_drone, drone_world_center, is_visible_at_view};
 const VIEW_MIN_X: i32 = -100;
 const VIEW_MAX_X: i32 = 100;
 const VIEW_MIN_Y: i32 = -60;
@@ -40,6 +42,19 @@ static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 
 static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
 static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Default)]
+struct SelectedDroneUi {
+    present: bool,
+    name: String,
+    health: i32,
+    max_health: i32,
+}
+
+fn selected_drone_ui() -> &'static Mutex<SelectedDroneUi> {
+    static SELECTED_DRONE_UI: OnceLock<Mutex<SelectedDroneUi>> = OnceLock::new();
+    SELECTED_DRONE_UI.get_or_init(|| Mutex::new(SelectedDroneUi::default()))
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn z_level_up() {
@@ -80,6 +95,57 @@ pub extern "C" fn chunk_cache_loaded_chunks() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn chunk_cache_total_chunks() -> u32 {
     INITIAL_CHUNK_TOTAL.load(Ordering::SeqCst)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_present() -> i32 {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present { 1 } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_name_ptr() -> *const u8 {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present {
+        ui.name.as_ptr()
+    } else {
+        ptr::null()
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_name_len() -> usize {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present { ui.name.len() } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_health() -> i32 {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present { ui.health } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_health_max() -> i32 {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present { ui.max_health } else { 0 }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn drone_action_move() {
+    log_ui_action("drone action: move");
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn drone_action_use() {
+    log_ui_action("drone action: use");
+}
+
+fn log_ui_action(label: &str) {
+    #[cfg(target_arch = "wasm32")]
+    miniquad::info!("{}", label);
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("{}", label);
 }
 
 fn zoom_scale_from_power(power: i32) -> f32 {
@@ -302,6 +368,7 @@ pub struct GameState {
     pinch_zoom_accumulator: f32,
     last_two_finger_center: Option<Vec2>,
     last_right_drag_pos: Option<Vec2>,
+    selected_drone: Option<usize>,
     render_chunk_xs: Vec<i32>,
     render_chunk_ys: Vec<i32>,
     world_chunk_xs: Vec<i32>,
@@ -353,7 +420,13 @@ impl GameState {
         let scratch_image =
             Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
         let mut world = World::new();
-        world.set_drones(vec![DronePose::new([0.0, -1.0, 1.0], [1.0, 0.0])]);
+        world.set_drones(vec![DronePose::new(
+            [0.0, -1.0, 1.0],
+            [1.0, 0.0],
+            "d1",
+            10,
+            10,
+        )]);
         let mut game = Self {
             world,
             chunk_cache,
@@ -374,6 +447,7 @@ impl GameState {
             pinch_zoom_accumulator: 0.0,
             last_two_finger_center: None,
             last_right_drag_pos: None,
+            selected_drone: None,
             render_chunk_xs,
             render_chunk_ys,
             world_chunk_xs,
@@ -400,6 +474,7 @@ impl GameState {
         let now = get_time();
         game.chunk_cache_last_avg_update_time = now;
         game.fps_last_update_time = now;
+        game.sync_selected_ui();
         game
     }
 
@@ -410,10 +485,8 @@ impl GameState {
     }
 
     fn world_to_screen_f(&self, world: Vec2, effective_block_size: f32) -> Vec2 {
-        let screen_x =
-            (world.x - VIEW_MIN_X as f32) * effective_block_size + self.camera_offset_x;
-        let screen_y =
-            (world.y - VIEW_MIN_Y as f32) * effective_block_size + self.camera_offset_y;
+        let screen_x = (world.x - VIEW_MIN_X as f32) * effective_block_size + self.camera_offset_x;
+        let screen_y = (world.y - VIEW_MIN_Y as f32) * effective_block_size + self.camera_offset_y;
         vec2(screen_x, screen_y)
     }
 
@@ -1012,6 +1085,68 @@ impl GameState {
             self.last_right_drag_pos = None;
         }
     }
+
+    fn handle_left_click_selection(&mut self) {
+        if !is_mouse_button_pressed(MouseButton::Left) {
+            return;
+        }
+
+        let (mouse_x, mouse_y) = mouse_position();
+        let screen_pos = vec2(mouse_x, mouse_y);
+        let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
+        let next_selection = self.find_drone_at_screen(screen_pos, effective_block_size);
+
+        if self.selected_drone != next_selection {
+            self.selected_drone = next_selection;
+            self.sync_selected_ui();
+        }
+    }
+
+    fn find_drone_at_screen(&self, screen_pos: Vec2, effective_block_size: f32) -> Option<usize> {
+        let base_radius_px = self.drone_draw.radius_tiles * effective_block_size;
+        let stroke_px = self.drone_draw.stroke_ratio * base_radius_px;
+        let selection_radius = base_radius_px + stroke_px + 4.0;
+
+        let mut closest: Option<(usize, f32)> = None;
+
+        for (index, drone) in self.world.drones().iter().enumerate() {
+            if !is_visible_at_view(drone, self.view_z) {
+                continue;
+            }
+
+            let center = self.world_to_screen_f(drone_world_center(drone), effective_block_size);
+            let distance = center.distance(screen_pos);
+            if distance <= selection_radius {
+                let replace = closest
+                    .as_ref()
+                    .map_or(true, |(_, best_distance)| distance < *best_distance);
+                if replace {
+                    closest = Some((index, distance));
+                }
+            }
+        }
+
+        closest.map(|(index, _)| index)
+    }
+
+    fn sync_selected_ui(&self) {
+        let mut ui = selected_drone_ui().lock().unwrap();
+        if let Some(selected_index) = self.selected_drone {
+            if let Some(drone) = self.world.drones().get(selected_index) {
+                ui.present = true;
+                ui.name.clear();
+                ui.name.push_str(&drone.name);
+                ui.health = drone.health;
+                ui.max_health = drone.max_health;
+                return;
+            }
+        }
+
+        ui.present = false;
+        ui.name.clear();
+        ui.health = 0;
+        ui.max_health = 0;
+    }
 }
 
 fn fill_block(image: &mut Image, block_x: usize, block_y: usize, color: Color) {
@@ -1127,6 +1262,7 @@ pub async fn run() {
         game.handle_mouse_wheel_zoom();
         game.handle_pinch_zoom();
         game.handle_right_mouse_drag();
+        game.handle_left_click_selection();
         game.process_chunk_cache_queue();
         game.update_chunk_cache_average_if_due();
         game.update_fps_if_due();
