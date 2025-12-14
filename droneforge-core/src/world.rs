@@ -37,6 +37,10 @@ impl World {
         &self.drones
     }
 
+    pub fn drones_mut(&mut self) -> &mut [DronePose] {
+        &mut self.drones
+    }
+
     pub fn set_drones(&mut self, drones: Vec<DronePose>) {
         self.drones = drones;
     }

@@ -30,6 +30,8 @@ const BASE_ZOOM_AT_POWER_ZERO: f32 = 1f32;
 const MIN_ZOOM_POWER: i32 = -48;
 const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
+const DRONE_MOVE_SPEED: f32 = 4.3;
+const FIXED_STEP_SECONDS: f32 = 1.0 / 60.0;
 
 mod drone;
 
@@ -268,6 +270,47 @@ impl Default for SelectionMode {
     }
 }
 
+#[derive(Debug, Clone)]
+struct MoveOrder {
+    target_center: Vec3,
+    target_position: Vec3,
+    direction: Vec3,
+    delta_per_sec: Vec3,
+}
+
+impl MoveOrder {
+    fn for_target(current: Vec3, target_center: Vec3) -> Option<Self> {
+        let target_position = target_center - vec3(0.5, 0.5, 0.0);
+        let offset = target_position - current;
+        let distance = offset.length();
+        if distance <= f32::EPSILON {
+            return None;
+        }
+
+        let direction = offset / distance;
+        let delta_per_sec = direction * DRONE_MOVE_SPEED;
+
+        Some(Self {
+            target_center,
+            target_position,
+            direction,
+            delta_per_sec,
+        })
+    }
+
+    fn status_text(&self) -> String {
+        format!(
+            "moving to {:.1}, {:.1}, {:.1} (d/s {:.2}, {:.2}, {:.2})",
+            self.target_center.x,
+            self.target_center.y,
+            self.target_center.z,
+            self.delta_per_sec.x,
+            self.delta_per_sec.y,
+            self.delta_per_sec.z
+        )
+    }
+}
+
 impl TileSet {
     async fn load_from_assets() -> Self {
         let atlas = load_image(TILESET_PATH)
@@ -421,6 +464,7 @@ pub struct GameState {
     selection_mode: SelectionMode,
     selected_drone: Option<usize>,
     selected_order: Option<String>,
+    active_orders: Vec<Option<MoveOrder>>,
     render_chunk_xs: Vec<i32>,
     render_chunk_ys: Vec<i32>,
     world_chunk_xs: Vec<i32>,
@@ -479,6 +523,7 @@ impl GameState {
             10,
             10,
         )]);
+        let drone_count = world.drones().len();
         let mut game = Self {
             world,
             chunk_cache,
@@ -502,6 +547,7 @@ impl GameState {
             selection_mode: SelectionMode::Inspect,
             selected_drone: None,
             selected_order: None,
+            active_orders: vec![None; drone_count],
             render_chunk_xs,
             render_chunk_ys,
             world_chunk_xs,
@@ -885,6 +931,81 @@ impl GameState {
 
     fn fixed_update(&mut self) {
         self.world.step();
+        self.advance_drone_orders(FIXED_STEP_SECONDS);
+    }
+
+    fn advance_drone_orders(&mut self, delta_seconds: f32) {
+        self.ensure_order_capacity();
+        let drone_count = self.world.drones().len();
+        let mut ui_dirty = false;
+
+        for index in 0..drone_count {
+            let Some(order) = self
+                .active_orders
+                .get(index)
+                .and_then(|order| order.as_ref())
+                .cloned()
+            else {
+                continue;
+            };
+
+            let arrived = if let Some(drone) = self.world.drones_mut().get_mut(index) {
+                Self::advance_single_drone(drone, &order, delta_seconds)
+            } else {
+                false
+            };
+
+            if arrived {
+                if let Some(slot) = self.active_orders.get_mut(index) {
+                    *slot = None;
+                }
+                if self.selected_drone == Some(index) {
+                    self.selected_order = Some(format!(
+                        "arrived at {:.1}, {:.1}, {:.1}",
+                        order.target_center.x, order.target_center.y, order.target_center.z
+                    ));
+                    ui_dirty = true;
+                }
+            }
+        }
+
+        if ui_dirty {
+            self.sync_selected_ui();
+        }
+    }
+
+    fn advance_single_drone(drone: &mut DronePose, order: &MoveOrder, delta_seconds: f32) -> bool {
+        let current = Vec3::new(drone.position[0], drone.position[1], drone.position[2]);
+        let remaining_vec = order.target_position - current;
+        let remaining_distance = remaining_vec.length();
+
+        if remaining_distance <= f32::EPSILON {
+            drone.position = [
+                order.target_position.x,
+                order.target_position.y,
+                order.target_position.z,
+            ];
+            Self::apply_heading_from_direction(drone, order.direction);
+            return true;
+        }
+
+        let step = order.delta_per_sec * delta_seconds;
+        let step_distance = step.length();
+
+        if step_distance >= remaining_distance {
+            drone.position = [
+                order.target_position.x,
+                order.target_position.y,
+                order.target_position.z,
+            ];
+            Self::apply_heading_from_direction(drone, order.direction);
+            true
+        } else {
+            let next = current + step;
+            drone.position = [next.x, next.y, next.z];
+            Self::apply_heading_from_direction(drone, order.direction);
+            false
+        }
     }
 
     fn render(&mut self) {
@@ -1178,36 +1299,83 @@ impl GameState {
         }
     }
 
+    fn ensure_order_capacity(&mut self) {
+        let drone_count = self.world.drones().len();
+        if self.active_orders.len() < drone_count {
+            self.active_orders.resize(drone_count, None);
+        }
+    }
+
+    fn order_status_for(&self, index: usize) -> Option<String> {
+        self.active_orders
+            .get(index)
+            .and_then(|order| order.as_ref())
+            .map(|order| order.status_text())
+    }
+
     fn apply_selection_click(&mut self) {
         let (mouse_x, mouse_y) = mouse_position();
         let screen_pos = vec2(mouse_x, mouse_y);
         let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
         let next_selection = self.find_drone_at_screen(screen_pos, effective_block_size);
 
-        if self.selected_drone != next_selection {
-            self.selected_drone = next_selection;
+        self.selected_drone = next_selection;
+        if let Some(index) = self.selected_drone {
+            self.ensure_order_capacity();
+            self.selected_order = self.order_status_for(index);
+        } else {
             self.selected_order = None;
-            self.sync_selected_ui();
+        }
+        self.sync_selected_ui();
+    }
+
+    fn apply_heading_from_direction(drone: &mut DronePose, direction: Vec3) {
+        let heading = vec2(direction.x, direction.y);
+        if heading.length_squared() > f32::EPSILON {
+            let normalized = heading.normalize();
+            drone.heading = [normalized.x, normalized.y];
         }
     }
 
     fn handle_move_target_click(&mut self) {
-        if self.selected_drone.is_none() {
+        let Some(selected_index) = self.selected_drone else {
             self.exit_move_mode();
             return;
-        }
+        };
 
         let (mouse_x, mouse_y) = mouse_position();
         let screen_pos = vec2(mouse_x, mouse_y);
         let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
         let target_world = self.screen_to_world(screen_pos, effective_block_size);
 
-        let order_text = format!(
-            "go to {:.1}, {:.1}, {:.1}",
-            target_world.x, target_world.y, target_world.z
-        );
+        self.ensure_order_capacity();
+        let current_position = if let Some(drone) = self.world.drones().get(selected_index) {
+            Vec3::new(drone.position[0], drone.position[1], drone.position[2])
+        } else {
+            self.exit_move_mode();
+            return;
+        };
 
-        self.selected_order = Some(order_text);
+        match MoveOrder::for_target(current_position, target_world) {
+            Some(order) => {
+                if let Some(slot) = self.active_orders.get_mut(selected_index) {
+                    *slot = Some(order.clone());
+                }
+                if let Some(drone) = self.world.drones_mut().get_mut(selected_index) {
+                    Self::apply_heading_from_direction(drone, order.direction);
+                }
+                self.selected_order = Some(order.status_text());
+            }
+            None => {
+                if let Some(slot) = self.active_orders.get_mut(selected_index) {
+                    *slot = None;
+                }
+                self.selected_order = Some(format!(
+                    "already at {:.1}, {:.1}, {:.1}",
+                    target_world.x, target_world.y, target_world.z
+                ));
+            }
+        }
         self.exit_move_mode();
         self.sync_selected_ui();
     }
@@ -1364,14 +1532,13 @@ pub async fn run() {
     let mut game = GameState::new_with_cache(generator, chunk_cache).await;
     game.initialize_camera_center();
     let mut accumulator = 0.0_f32;
-    let fixed_step = 1.0_f32 / 60.0_f32; // 60 Hz simulation
 
     loop {
         // Consume real elapsed time in fixed-size simulation steps.
         accumulator += get_frame_time();
-        while accumulator >= fixed_step {
+        while accumulator >= FIXED_STEP_SECONDS {
             game.fixed_update();
-            accumulator -= fixed_step;
+            accumulator -= FIXED_STEP_SECONDS;
         }
 
         let pending_z_delta = take_pending_z_delta();
