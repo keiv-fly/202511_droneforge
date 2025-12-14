@@ -421,7 +421,7 @@ impl GameState {
             Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
         let mut world = World::new();
         world.set_drones(vec![DronePose::new(
-            [0.0, -1.0, 1.0],
+            [0.0, -1.0, 0.0],
             [1.0, 0.0],
             "d1",
             10,
@@ -511,32 +511,33 @@ impl GameState {
     }
 
     fn render_chunk_ready(&self, key: &RenderChunkKey) -> bool {
-        let chunk_z = div_floor(key.z, CHUNK_HEIGHT as i32);
-        let wall_chunk_z = div_floor(key.z.saturating_add(1), CHUNK_HEIGHT as i32);
+        let floor_chunk_z = div_floor(key.z.saturating_sub(1), CHUNK_HEIGHT as i32);
+        let wall_chunk_z = div_floor(key.z, CHUNK_HEIGHT as i32);
 
-        let base = ChunkPosition::new(key.chunk_x, key.chunk_y, chunk_z);
+        let base = ChunkPosition::new(key.chunk_x, key.chunk_y, floor_chunk_z);
         let wall = ChunkPosition::new(key.chunk_x, key.chunk_y, wall_chunk_z);
 
         self.chunk_cache.has_chunk(&base) && self.chunk_cache.has_chunk(&wall)
     }
 
     fn prime_chunk_cache_queue(&mut self) {
-        let mut prioritized_levels = vec![0, 1];
-        for dz in (-PRELOAD_Z_RADIUS)..=(PRELOAD_Z_RADIUS + 1) {
-            if dz == 0 || dz == 1 {
+        let base_level = DEFAULT_VIEW_Z;
+        let mut prioritized_levels = vec![base_level.saturating_sub(1), base_level];
+        for dz in (-PRELOAD_Z_RADIUS - 1)..=PRELOAD_Z_RADIUS {
+            if dz == -1 || dz == 0 {
                 continue;
             }
-            prioritized_levels.push(dz);
+            prioritized_levels.push(base_level.saturating_add(dz));
         }
         self.rebuild_chunk_cache_queue_from_world_levels(&prioritized_levels);
     }
 
     fn reprioritize_chunk_cache_for_view(&mut self, base_world_z: i32) {
         let mut prioritized_levels = Vec::new();
+        prioritized_levels.push(base_world_z.saturating_sub(1));
         prioritized_levels.push(base_world_z);
-        prioritized_levels.push(base_world_z.saturating_add(1));
-        for dz in (-PRELOAD_Z_RADIUS)..=(PRELOAD_Z_RADIUS + 1) {
-            if dz == 0 || dz == 1 {
+        for dz in (-PRELOAD_Z_RADIUS - 1)..=PRELOAD_Z_RADIUS {
+            if dz == -1 || dz == 0 {
                 continue;
             }
             prioritized_levels.push(base_world_z.saturating_add(dz));
@@ -645,8 +646,8 @@ impl GameState {
     }
 
     fn pending_chunk_cache_counts(&self) -> (usize, usize) {
-        let chunk_z = div_floor(self.view_z, CHUNK_HEIGHT as i32);
-        let wall_chunk_z = div_floor(self.view_z.saturating_add(1), CHUNK_HEIGHT as i32);
+        let chunk_z = div_floor(self.view_z.saturating_sub(1), CHUNK_HEIGHT as i32);
+        let wall_chunk_z = div_floor(self.view_z, CHUNK_HEIGHT as i32);
 
         let plane_chunks = self
             .world_chunk_xs
@@ -669,6 +670,8 @@ impl GameState {
 
     fn build_level_texture(&mut self, z: i32) -> RenderedLevelCache {
         let palette = BlockPalette;
+        let floor_z = z.saturating_sub(1);
+        let wall_z = z;
         let mut chunk_xs = self.render_chunk_xs.clone();
         let mut chunk_ys = self.render_chunk_ys.clone();
         chunk_xs.sort_unstable();
@@ -701,7 +704,6 @@ impl GameState {
 
                 let base_x = chunk_x * RENDER_CHUNK_SIZE;
                 let base_y = chunk_y * RENDER_CHUNK_SIZE;
-                let z_wall = z + 1;
                 let dst_base_x = chunk_x_index.saturating_mul(RENDER_CHUNK_SIZE as usize);
                 let dst_base_y = chunk_y_index.saturating_mul(RENDER_CHUNK_SIZE as usize);
 
@@ -709,8 +711,8 @@ impl GameState {
                     for x in 0..RENDER_CHUNK_SIZE as usize {
                         let world_x = base_x + x as i32;
                         let world_y = base_y + y as i32;
-                        let block = block_at(&self.chunk_cache, world_x, world_y, z);
-                        let upper_block = block_at(&self.chunk_cache, world_x, world_y, z_wall);
+                        let block = block_at(&self.chunk_cache, world_x, world_y, floor_z);
+                        let wall_block = block_at(&self.chunk_cache, world_x, world_y, wall_z);
 
                         let Some(block) = block else {
                             continue;
@@ -719,12 +721,12 @@ impl GameState {
                         let dst_x = dst_base_x.saturating_add(x);
                         let dst_y = dst_base_y.saturating_add(y);
 
-                        if let Some(upper_block) = upper_block {
-                            if is_solid(upper_block) {
+                        if let Some(wall_block) = wall_block {
+                            if is_solid(wall_block) {
                                 let mask =
-                                    wall_edge_mask(&self.chunk_cache, world_x, world_y, z_wall);
+                                    wall_edge_mask(&self.chunk_cache, world_x, world_y, wall_z);
 
-                                if let Some(tile) = self.tiles.wall_region(upper_block, mask) {
+                                if let Some(tile) = self.tiles.wall_region(wall_block, mask) {
                                     blit_tile_region(
                                         &mut self.scratch_image,
                                         self.tiles.atlas(),

@@ -21,25 +21,27 @@ impl DeterministicMap {
     }
 
     pub fn block_at(&self, coord: WorldCoord) -> BlockId {
-        if !self.within_bounds(coord) {
+        let shifted = WorldCoord::new(coord.x, coord.y, coord.z.saturating_add(1));
+
+        if !self.within_bounds(shifted) {
             return AIR;
         }
 
-        if coord.z == VERTICAL_LIMIT {
+        if shifted.z == VERTICAL_LIMIT {
             return AIR;
         }
 
-        if coord.z == -VERTICAL_LIMIT {
+        if shifted.z == -VERTICAL_LIMIT {
             return BEDROCK;
         }
 
-        if coord.x <= 0 {
-            if (-4..=0).contains(&coord.z) {
+        if shifted.x <= 0 {
+            if (-4..=0).contains(&shifted.z) {
                 return DIRT;
             }
 
-            if (-64..=-5).contains(&coord.z) {
-                let mut rng = self.rng_for_coord(coord);
+            if (-64..=-5).contains(&shifted.z) {
+                let mut rng = self.rng_for_coord(shifted);
                 if rng.u32(0..100) < 5 {
                     return IRON;
                 }
@@ -49,10 +51,10 @@ impl DeterministicMap {
             return AIR;
         }
 
-        if (coord.x > 0 && (-64..=0).contains(&coord.z))
-            || (coord.x - coord.z + 1 > 0 && coord.z > 0)
+        if (shifted.x > 0 && (-64..=0).contains(&shifted.z))
+            || (shifted.x - shifted.z + 1 > 0 && shifted.z > 0)
         {
-            let mut rng = self.rng_for_coord(coord);
+            let mut rng = self.rng_for_coord(shifted);
             if rng.u32(0..100) < 5 {
                 return IRON;
             }
@@ -124,16 +126,16 @@ mod tests {
     #[test]
     fn produces_bedrock_and_air_caps() {
         let generator = map();
-        assert_eq!(generator.block_at(WorldCoord::new(0, 0, 65)), AIR);
-        assert_eq!(generator.block_at(WorldCoord::new(0, 0, -65)), BEDROCK);
+        assert_eq!(generator.block_at(WorldCoord::new(0, 0, 64)), AIR);
+        assert_eq!(generator.block_at(WorldCoord::new(0, 0, -66)), BEDROCK);
     }
 
     #[test]
     fn places_left_side_layers() {
         let generator = map();
-        assert_eq!(generator.block_at(WorldCoord::new(-3, 0, 0)), DIRT);
-        assert_eq!(generator.block_at(WorldCoord::new(-3, 0, -5)), STONE);
-        assert_eq!(generator.block_at(WorldCoord::new(-3, 0, -64)), STONE);
+        assert_eq!(generator.block_at(WorldCoord::new(-3, 0, -1)), DIRT);
+        assert_eq!(generator.block_at(WorldCoord::new(-3, 0, -6)), STONE);
+        assert_eq!(generator.block_at(WorldCoord::new(-3, 0, -65)), STONE);
     }
 
     #[test]
@@ -142,7 +144,7 @@ mod tests {
         let mut iron_coord = None;
 
         for x in 1..100 {
-            let candidate = WorldCoord::new(x, 0, -10);
+            let candidate = WorldCoord::new(x, 0, -11);
             if generator.block_at(candidate) == IRON {
                 iron_coord = Some(candidate);
                 break;
@@ -154,7 +156,7 @@ mod tests {
 
         let different_seed = DeterministicMap::new(7);
         let diverges = (1..20).any(|x| {
-            let coord = WorldCoord::new(x, 0, -10);
+            let coord = WorldCoord::new(x, 0, -11);
             generator.block_at(coord) != different_seed.block_at(coord)
         });
 
@@ -165,9 +167,9 @@ mod tests {
     fn stone_above_ground_follows_diagonal_rule() {
         let generator = map();
         // For z > 0 the area where x - z + 1 > 0 should contain stone, otherwise air.
-        assert_eq!(generator.block_at(WorldCoord::new(4, 0, 2)), STONE);
-        assert_eq!(generator.block_at(WorldCoord::new(1, 0, 3)), AIR);
-        assert_eq!(generator.block_at(WorldCoord::new(-1, 0, 3)), AIR);
+        assert_eq!(generator.block_at(WorldCoord::new(4, 0, 1)), STONE);
+        assert_eq!(generator.block_at(WorldCoord::new(1, 0, 2)), AIR);
+        assert_eq!(generator.block_at(WorldCoord::new(-1, 0, 2)), AIR);
     }
 
     #[test]
