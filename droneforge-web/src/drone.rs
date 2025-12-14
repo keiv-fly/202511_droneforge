@@ -28,7 +28,7 @@ impl Default for DroneDrawConfig {
 
 pub fn is_visible_at_view(drone: &DronePose, view_z: i32) -> bool {
     let z_level = drone.position[2].floor() as i32;
-    z_level == view_z || z_level == view_z.saturating_add(1)
+    z_level == view_z.saturating_add(1)
 }
 
 pub fn drone_world_center(drone: &DronePose) -> Vec2 {
