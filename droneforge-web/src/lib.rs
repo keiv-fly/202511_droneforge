@@ -9,7 +9,7 @@ use macroquad::miniquad;
 use macroquad::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ptr;
-use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::drone::{DroneDrawConfig, draw_drone, drone_world_center, is_visible_at_view};
@@ -40,6 +40,9 @@ const LOAD_METRIC_INTERVAL_SECS: f64 = 5.0;
 
 static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 
+static PENDING_MOVE_TOGGLE: AtomicBool = AtomicBool::new(false);
+static MOVE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
 static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
 
@@ -49,6 +52,7 @@ struct SelectedDroneUi {
     name: String,
     health: i32,
     max_health: i32,
+    status: String,
 }
 
 fn selected_drone_ui() -> &'static Mutex<SelectedDroneUi> {
@@ -120,6 +124,22 @@ pub extern "C" fn selected_drone_name_len() -> usize {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_status_ptr() -> *const u8 {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present && !ui.status.is_empty() {
+        ui.status.as_ptr()
+    } else {
+        ptr::null()
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_status_len() -> usize {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present { ui.status.len() } else { 0 }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn selected_drone_health() -> i32 {
     let ui = selected_drone_ui().lock().unwrap();
     if ui.present { ui.health } else { 0 }
@@ -134,11 +154,21 @@ pub extern "C" fn selected_drone_health_max() -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn drone_action_move() {
     log_ui_action("drone action: move");
+    PENDING_MOVE_TOGGLE.store(true, Ordering::SeqCst);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn drone_action_use() {
     log_ui_action("drone action: use");
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn move_mode_active() -> i32 {
+    if MOVE_MODE_ACTIVE.load(Ordering::SeqCst) {
+        1
+    } else {
+        0
+    }
 }
 
 fn log_ui_action(label: &str) {
@@ -158,6 +188,14 @@ fn normalized_zoom_from_power(power: i32) -> f32 {
 
 fn clamp_zoom_power(power: i32) -> i32 {
     power.clamp(MIN_ZOOM_POWER, MAX_ZOOM_POWER)
+}
+
+fn take_pending_move_toggle() -> bool {
+    PENDING_MOVE_TOGGLE.swap(false, Ordering::SeqCst)
+}
+
+fn set_move_mode_active(active: bool) {
+    MOVE_MODE_ACTIVE.store(active, Ordering::SeqCst);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -216,6 +254,18 @@ struct TileSet {
     atlas: Image,
     floor_tiles: HashMap<BlockId, TileRegion>,
     wall_tiles: HashMap<WallTileKey, TileRegion>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectionMode {
+    Inspect,
+    MoveTarget,
+}
+
+impl Default for SelectionMode {
+    fn default() -> Self {
+        SelectionMode::Inspect
+    }
 }
 
 impl TileSet {
@@ -368,7 +418,9 @@ pub struct GameState {
     pinch_zoom_accumulator: f32,
     last_two_finger_center: Option<Vec2>,
     last_right_drag_pos: Option<Vec2>,
+    selection_mode: SelectionMode,
     selected_drone: Option<usize>,
+    selected_order: Option<String>,
     render_chunk_xs: Vec<i32>,
     render_chunk_ys: Vec<i32>,
     world_chunk_xs: Vec<i32>,
@@ -447,7 +499,9 @@ impl GameState {
             pinch_zoom_accumulator: 0.0,
             last_two_finger_center: None,
             last_right_drag_pos: None,
+            selection_mode: SelectionMode::Inspect,
             selected_drone: None,
+            selected_order: None,
             render_chunk_xs,
             render_chunk_ys,
             world_chunk_xs,
@@ -469,6 +523,8 @@ impl GameState {
         debug_assert!(game.drone_sprites.source_rect(0, 0).is_some());
         debug_assert!(game.drone_sprites.sprite_size() > 0.0);
 
+        set_move_mode_active(false);
+
         game.prime_chunk_cache_queue();
 
         let now = get_time();
@@ -488,6 +544,14 @@ impl GameState {
         let screen_x = (world.x - VIEW_MIN_X as f32) * effective_block_size + self.camera_offset_x;
         let screen_y = (world.y - VIEW_MIN_Y as f32) * effective_block_size + self.camera_offset_y;
         vec2(screen_x, screen_y)
+    }
+
+    fn screen_to_world(&self, screen: Vec2, effective_block_size: f32) -> Vec3 {
+        let world_x =
+            ((screen.x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32;
+        let world_y =
+            ((screen.y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32;
+        Vec3::new(world_x, world_y, self.view_z as f32)
     }
 
     fn initialize_camera_center(&mut self) {
@@ -1071,6 +1135,21 @@ impl GameState {
         self.last_pinch_distance = Some(current_distance);
     }
 
+    fn apply_pending_ui_actions(&mut self) {
+        if take_pending_move_toggle() {
+            if self.selection_mode == SelectionMode::MoveTarget {
+                self.exit_move_mode();
+            } else if self.selected_drone.is_some() {
+                self.selection_mode = SelectionMode::MoveTarget;
+                set_move_mode_active(true);
+            }
+        }
+
+        if self.selection_mode == SelectionMode::MoveTarget && self.selected_drone.is_none() {
+            self.exit_move_mode();
+        }
+    }
+
     fn handle_right_mouse_drag(&mut self) {
         let is_dragging = is_mouse_button_down(MouseButton::Right);
         let (mouse_x, mouse_y) = mouse_position();
@@ -1088,11 +1167,18 @@ impl GameState {
         }
     }
 
-    fn handle_left_click_selection(&mut self) {
+    fn handle_left_click(&mut self) {
         if !is_mouse_button_pressed(MouseButton::Left) {
             return;
         }
 
+        match self.selection_mode {
+            SelectionMode::Inspect => self.apply_selection_click(),
+            SelectionMode::MoveTarget => self.handle_move_target_click(),
+        }
+    }
+
+    fn apply_selection_click(&mut self) {
         let (mouse_x, mouse_y) = mouse_position();
         let screen_pos = vec2(mouse_x, mouse_y);
         let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
@@ -1100,8 +1186,30 @@ impl GameState {
 
         if self.selected_drone != next_selection {
             self.selected_drone = next_selection;
+            self.selected_order = None;
             self.sync_selected_ui();
         }
+    }
+
+    fn handle_move_target_click(&mut self) {
+        if self.selected_drone.is_none() {
+            self.exit_move_mode();
+            return;
+        }
+
+        let (mouse_x, mouse_y) = mouse_position();
+        let screen_pos = vec2(mouse_x, mouse_y);
+        let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
+        let target_world = self.screen_to_world(screen_pos, effective_block_size);
+
+        let order_text = format!(
+            "go to {:.1}, {:.1}, {:.1}",
+            target_world.x, target_world.y, target_world.z
+        );
+
+        self.selected_order = Some(order_text);
+        self.exit_move_mode();
+        self.sync_selected_ui();
     }
 
     fn find_drone_at_screen(&self, screen_pos: Vec2, effective_block_size: f32) -> Option<usize> {
@@ -1140,6 +1248,10 @@ impl GameState {
                 ui.name.push_str(&drone.name);
                 ui.health = drone.health;
                 ui.max_health = drone.max_health;
+                ui.status.clear();
+                if let Some(order) = &self.selected_order {
+                    ui.status.push_str(order);
+                }
                 return;
             }
         }
@@ -1148,6 +1260,12 @@ impl GameState {
         ui.name.clear();
         ui.health = 0;
         ui.max_health = 0;
+        ui.status.clear();
+    }
+
+    fn exit_move_mode(&mut self) {
+        self.selection_mode = SelectionMode::Inspect;
+        set_move_mode_active(false);
     }
 }
 
@@ -1261,10 +1379,11 @@ pub async fn run() {
             game.shift_view_z(pending_z_delta);
         }
 
+        game.apply_pending_ui_actions();
         game.handle_mouse_wheel_zoom();
         game.handle_pinch_zoom();
         game.handle_right_mouse_drag();
-        game.handle_left_click_selection();
+        game.handle_left_click();
         game.process_chunk_cache_queue();
         game.update_chunk_cache_average_if_due();
         game.update_fps_if_due();
