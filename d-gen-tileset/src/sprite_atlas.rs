@@ -1,12 +1,15 @@
-use image::{Rgba, RgbaImage};
+use image::{GenericImage, Rgba, RgbaImage};
 use roxmltree::Document;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
 
 const DIRECTION_ROTATIONS: [f32; 4] = [-90.0, 0.0, 90.0, 180.0];
-pub const SPRITE_SIZE: u32 = 64;
+pub const SPRITE_SIZE: u32 = 256;
+const SPRITE_PADDING: u32 = 2;
 const SAMPLE_EPSILON: f32 = 0.25;
+const AA_SAMPLES_PER_AXIS: u32 = 4;
+const AA_SAMPLE_COUNT: u32 = AA_SAMPLES_PER_AXIS * AA_SAMPLES_PER_AXIS;
 
 #[derive(Clone, Copy)]
 struct SvgViewBox {
@@ -178,29 +181,79 @@ fn parse_hex_color(raw: &str) -> Option<Rgba<u8>> {
     Some(Rgba([r, g, b, 255]))
 }
 
+fn sprite_to_padded_cell_with_extrusion(
+    sprite: &RgbaImage,
+    sprite_size: u32,
+    pad: u32,
+) -> RgbaImage {
+    let stride = sprite_size + pad * 2;
+    let mut cell = RgbaImage::from_pixel(stride, stride, Rgba([0, 0, 0, 0]));
+
+    // Copy sprite into the centered area.
+    for y in 0..sprite_size {
+        for x in 0..sprite_size {
+            cell.put_pixel(pad + x, pad + y, *sprite.get_pixel(x, y));
+        }
+    }
+
+    // Extrude top/bottom edges outward into the padding.
+    for x in 0..sprite_size {
+        let top = *cell.get_pixel(pad + x, pad);
+        let bottom = *cell.get_pixel(pad + x, pad + sprite_size - 1);
+        for p in 0..pad {
+            cell.put_pixel(pad + x, p, top);
+            cell.put_pixel(pad + x, pad + sprite_size + p, bottom);
+        }
+    }
+
+    // Extrude left/right edges outward into the padding.
+    for y in 0..sprite_size {
+        let left = *cell.get_pixel(pad, pad + y);
+        let right = *cell.get_pixel(pad + sprite_size - 1, pad + y);
+        for p in 0..pad {
+            cell.put_pixel(p, pad + y, left);
+            cell.put_pixel(pad + sprite_size + p, pad + y, right);
+        }
+    }
+
+    // Fill corners using nearest corner pixels.
+    let tl = *cell.get_pixel(pad, pad);
+    let tr = *cell.get_pixel(pad + sprite_size - 1, pad);
+    let bl = *cell.get_pixel(pad, pad + sprite_size - 1);
+    let br = *cell.get_pixel(pad + sprite_size - 1, pad + sprite_size - 1);
+    for y in 0..pad {
+        for x in 0..pad {
+            cell.put_pixel(x, y, tl);
+            cell.put_pixel(pad + sprite_size + x, y, tr);
+            cell.put_pixel(x, pad + sprite_size + y, bl);
+            cell.put_pixel(pad + sprite_size + x, pad + sprite_size + y, br);
+        }
+    }
+
+    cell
+}
+
 fn render_atlas(specs: &[DroneSpec], target_size: u32) -> RgbaImage {
     let columns = DIRECTION_ROTATIONS.len() as u32;
     let rows = specs.len() as u32;
+    let stride = target_size + SPRITE_PADDING * 2;
     let mut atlas = RgbaImage::from_pixel(
-        columns * target_size,
-        rows * target_size,
+        columns * stride,
+        rows * stride,
         Rgba([0, 0, 0, 0]),
     );
 
     for (row, spec) in specs.iter().enumerate() {
         for (col, rotation) in DIRECTION_ROTATIONS.iter().copied().enumerate() {
             let sprite = render_drone(spec, rotation, target_size);
-            let offset_x = (col as u32) * target_size;
-            let offset_y = (row as u32) * target_size;
+            let sprite_cell =
+                sprite_to_padded_cell_with_extrusion(&sprite, target_size, SPRITE_PADDING);
+            let offset_x = (col as u32) * stride;
+            let offset_y = (row as u32) * stride;
 
-            for y in 0..target_size {
-                for x in 0..target_size {
-                    let pixel = *sprite.get_pixel(x, y);
-                    if pixel.0[3] != 0 {
-                        atlas.put_pixel(offset_x + x, offset_y + y, pixel);
-                    }
-                }
-            }
+            atlas
+                .copy_from(&sprite_cell, offset_x, offset_y)
+                .expect("sprite cell should always fit inside the atlas");
         }
     }
 
@@ -215,15 +268,42 @@ fn render_drone(spec: &DroneSpec, rotation_deg: f32, target_size: u32) -> RgbaIm
     let center_x = spec.viewbox.min_x + spec.viewbox.width * 0.5;
     let center_y = spec.viewbox.min_y + spec.viewbox.height * 0.5;
     let rotation_rad = rotation_deg.to_radians();
+    let samples_per_axis = AA_SAMPLES_PER_AXIS as f32;
+    let inv_sample_count = 1.0 / AA_SAMPLE_COUNT as f32;
 
     for y in 0..target_size {
         for x in 0..target_size {
-            let svg_x = (x as f32 + 0.5) / scale + spec.viewbox.min_x;
-            let svg_y = (y as f32 + 0.5) / scale + spec.viewbox.min_y;
-            let (rot_x, rot_y) = rotate_point(svg_x, svg_y, center_x, center_y, -rotation_rad);
+            let mut sum = [0.0f32; 4];
+            let mut has_coverage = false;
 
-            if let Some(color) = sample_color(spec, rot_x, rot_y) {
-                image.put_pixel(x, y, color);
+            for sy in 0..AA_SAMPLES_PER_AXIS {
+                for sx in 0..AA_SAMPLES_PER_AXIS {
+                    let sample_x = x as f32 + (sx as f32 + 0.5) / samples_per_axis;
+                    let sample_y = y as f32 + (sy as f32 + 0.5) / samples_per_axis;
+                    let svg_x = sample_x / scale + spec.viewbox.min_x;
+                    let svg_y = sample_y / scale + spec.viewbox.min_y;
+                    let (rot_x, rot_y) =
+                        rotate_point(svg_x, svg_y, center_x, center_y, -rotation_rad);
+
+                    if let Some(color) = sample_color(spec, rot_x, rot_y) {
+                        has_coverage = true;
+                        sum[0] += color.0[0] as f32;
+                        sum[1] += color.0[1] as f32;
+                        sum[2] += color.0[2] as f32;
+                        sum[3] += color.0[3] as f32;
+                    }
+                }
+            }
+
+            if has_coverage {
+                let pixel = Rgba([
+                    (sum[0] * inv_sample_count).round() as u8,
+                    (sum[1] * inv_sample_count).round() as u8,
+                    (sum[2] * inv_sample_count).round() as u8,
+                    (sum[3] * inv_sample_count).round() as u8,
+                ]);
+
+                image.put_pixel(x, y, pixel);
             }
         }
     }

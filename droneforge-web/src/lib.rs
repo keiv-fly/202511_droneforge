@@ -16,6 +16,11 @@ const DEFAULT_VIEW_Z: i32 = 0;
 
 const BLOCK_PIXEL_SIZE: u16 = layout::BLOCK_PIXEL_SIZE as u16;
 const TILESET_PATH: &str = "assets/tileset.png";
+const SPRITE_ATLAS_PATH: &str = "assets/sprites.png";
+const DRONE_SPRITE_COLUMNS: u32 = 4;
+const DRONE_SPRITE_ROWS: u32 = 4;
+const DRONE_SPRITE_SIZE_PX: u32 = 256;
+const DRONE_SPRITE_PADDING_PX: u32 = 2; // keep in sync with d-gen-tileset
 const BASE_ZOOM_AT_POWER_ZERO: f32 = 1f32;
 const MIN_ZOOM_POWER: i32 = -48;
 const MAX_ZOOM_POWER: i32 = 15;
@@ -189,11 +194,95 @@ impl TileSet {
     }
 }
 
+struct DroneSpriteAtlas {
+    texture: Texture2D,
+    regions: Vec<Rect>,
+    sprite_size: f32,
+    columns: u32,
+}
+
+impl DroneSpriteAtlas {
+    async fn load_from_assets() -> Self {
+        let atlas_image = load_image(SPRITE_ATLAS_PATH).await.unwrap_or_else(|err| {
+            panic!("failed to load sprite atlas at {SPRITE_ATLAS_PATH}: {err}")
+        });
+
+        let width = atlas_image.width() as u32;
+        let height = atlas_image.height() as u32;
+        let expected_w = DRONE_SPRITE_COLUMNS;
+        let expected_h = DRONE_SPRITE_ROWS;
+
+        if width < expected_w || height < expected_h {
+            panic!(
+                "sprite atlas too small: {}x{} for {}x{} grid",
+                width, height, expected_w, expected_h
+            );
+        }
+
+        let cell_w = width.checked_div(expected_w).unwrap_or(0).max(1);
+        let cell_h = height.checked_div(expected_h).unwrap_or(0).max(1);
+
+        if cell_w != cell_h {
+            panic!(
+                "non-square sprite cells not supported: {}x{} (atlas {}x{})",
+                cell_w, cell_h, width, height
+            );
+        }
+
+        let expected_cell = DRONE_SPRITE_SIZE_PX + DRONE_SPRITE_PADDING_PX * 2;
+        if cell_w < expected_cell {
+            panic!(
+                "sprite atlas cells too small: cell={} expected_at_least={}",
+                cell_w, expected_cell
+            );
+        }
+
+        let stride = cell_w as f32;
+        let pad = DRONE_SPRITE_PADDING_PX as f32;
+        let sprite_size = DRONE_SPRITE_SIZE_PX as f32;
+        let texture = Texture2D::from_image(&atlas_image);
+        texture.set_filter(FilterMode::Linear);
+
+        let mut regions = Vec::new();
+        for row in 0..DRONE_SPRITE_ROWS {
+            for col in 0..DRONE_SPRITE_COLUMNS {
+                let x = col as f32 * stride + pad;
+                let y = row as f32 * stride + pad;
+                regions.push(Rect::new(x, y, sprite_size, sprite_size));
+            }
+        }
+
+        Self {
+            texture,
+            regions,
+            sprite_size,
+            columns: DRONE_SPRITE_COLUMNS,
+        }
+    }
+
+    fn texture(&self) -> &Texture2D {
+        &self.texture
+    }
+
+    fn source_rect(&self, drone_index: usize, direction_index: usize) -> Option<Rect> {
+        let stride = self.columns as usize;
+        let index = drone_index
+            .checked_mul(stride)?
+            .checked_add(direction_index)?;
+        self.regions.get(index).copied()
+    }
+
+    fn sprite_size(&self) -> f32 {
+        self.sprite_size
+    }
+}
+
 pub struct GameState {
     world: World,
     chunk_cache: ChunkCache,
     generator: DeterministicMap,
     tiles: TileSet,
+    drone_sprites: DroneSpriteAtlas,
     scratch_image: Image,
     rendered_level: Option<RenderedLevelCache>,
     rendered_level_dirty: bool,
@@ -228,19 +317,26 @@ pub struct GameState {
 impl GameState {
     pub async fn new() -> Self {
         let tiles = TileSet::load_from_assets().await;
+        let drone_sprites = DroneSpriteAtlas::load_from_assets().await;
         let generator = DeterministicMap::new(42);
         let cache_capacity =
             ChunkCache::chunk_count_for_limits(HORIZONTAL_LIMIT, VERTICAL_LIMIT).max(1);
         let chunk_cache = ChunkCache::with_capacity(cache_capacity);
-        Self::build(generator, chunk_cache, tiles)
+        Self::build(generator, chunk_cache, tiles, drone_sprites)
     }
 
     pub async fn new_with_cache(generator: DeterministicMap, chunk_cache: ChunkCache) -> Self {
         let tiles = TileSet::load_from_assets().await;
-        Self::build(generator, chunk_cache, tiles)
+        let drone_sprites = DroneSpriteAtlas::load_from_assets().await;
+        Self::build(generator, chunk_cache, tiles, drone_sprites)
     }
 
-    fn build(generator: DeterministicMap, chunk_cache: ChunkCache, tiles: TileSet) -> Self {
+    fn build(
+        generator: DeterministicMap,
+        chunk_cache: ChunkCache,
+        tiles: TileSet,
+        drone_sprites: DroneSpriteAtlas,
+    ) -> Self {
         let initial_zoom_power = 0;
         let (render_chunk_xs, render_chunk_ys) =
             render_chunk_ranges(VIEW_MIN_X, VIEW_MAX_X, VIEW_MIN_Y, VIEW_MAX_Y);
@@ -255,6 +351,7 @@ impl GameState {
             chunk_cache,
             generator,
             tiles,
+            drone_sprites,
             scratch_image,
             rendered_level: None,
             rendered_level_dirty: true,
@@ -286,12 +383,21 @@ impl GameState {
             fps_last_update_time: 0.0,
         };
 
+        debug_assert!(game.drone_sprites.source_rect(0, 0).is_some());
+        debug_assert!(game.drone_sprites.sprite_size() > 0.0);
+
         game.prime_chunk_cache_queue();
 
         let now = get_time();
         game.chunk_cache_last_avg_update_time = now;
         game.fps_last_update_time = now;
         game
+    }
+
+    fn world_to_screen(&self, world_x: i32, world_y: i32, effective_block_size: f32) -> Vec2 {
+        let screen_x = (world_x - VIEW_MIN_X) as f32 * effective_block_size + self.camera_offset_x;
+        let screen_y = (world_y - VIEW_MIN_Y) as f32 * effective_block_size + self.camera_offset_y;
+        vec2(screen_x, screen_y)
     }
 
     fn initialize_camera_center(&mut self) {
@@ -627,6 +733,8 @@ impl GameState {
 
     fn render(&mut self) {
         clear_background(BLACK);
+        // Keep the drone sprite atlas warm and available for future draw calls.
+        let _ = self.drone_sprites.texture();
 
         let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
         let normalized_zoom = normalized_zoom_from_power(self.zoom_power);
@@ -726,6 +834,28 @@ impl GameState {
             24.0,
             WHITE,
         );
+
+        // Draw a placeholder drone sprite from z + 1 onto the current render level so it is visible at startup.
+        if self.view_z + 1 == 1 {
+            if let Some(source) = self.drone_sprites.source_rect(2, 1) {
+                let base = self.world_to_screen(0, -1, effective_block_size);
+                let dest_size = vec2(effective_block_size, effective_block_size);
+                let draw_x = base.x;
+                let draw_y = base.y;
+
+                draw_texture_ex(
+                    self.drone_sprites.texture(),
+                    draw_x,
+                    draw_y,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(dest_size),
+                        source: Some(source),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
 
         let screen_center_x = screen_width() / 2.0;
         let screen_center_y = screen_height() / 2.0;
