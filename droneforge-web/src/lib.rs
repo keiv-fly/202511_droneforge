@@ -272,15 +272,19 @@ impl Default for SelectionMode {
 
 #[derive(Debug, Clone)]
 struct MoveOrder {
-    target_center: Vec3,
+    target_tile: (i32, i32, i32),
     target_position: Vec3,
     direction: Vec3,
     delta_per_sec: Vec3,
 }
 
 impl MoveOrder {
-    fn for_target(current: Vec3, target_center: Vec3) -> Option<Self> {
-        let target_position = target_center - vec3(0.5, 0.5, 0.0);
+    fn for_target(current: Vec3, target_tile: (i32, i32, i32)) -> Option<Self> {
+        let target_position = vec3(
+            target_tile.0 as f32,
+            target_tile.1 as f32,
+            target_tile.2 as f32,
+        );
         let offset = target_position - current;
         let distance = offset.length();
         if distance <= f32::EPSILON {
@@ -291,7 +295,7 @@ impl MoveOrder {
         let delta_per_sec = direction * DRONE_MOVE_SPEED;
 
         Some(Self {
-            target_center,
+            target_tile,
             target_position,
             direction,
             delta_per_sec,
@@ -300,10 +304,10 @@ impl MoveOrder {
 
     fn status_text(&self) -> String {
         format!(
-            "moving to {:.1}, {:.1}, {:.1} (d/s {:.2}, {:.2}, {:.2})",
-            self.target_center.x,
-            self.target_center.y,
-            self.target_center.z,
+            "moving to tile {}, {}, {} (d/s {:.2}, {:.2}, {:.2})",
+            self.target_tile.0,
+            self.target_tile.1,
+            self.target_tile.2,
             self.delta_per_sec.x,
             self.delta_per_sec.y,
             self.delta_per_sec.z
@@ -961,8 +965,8 @@ impl GameState {
                 }
                 if self.selected_drone == Some(index) {
                     self.selected_order = Some(format!(
-                        "arrived at {:.1}, {:.1}, {:.1}",
-                        order.target_center.x, order.target_center.y, order.target_center.z
+                        "arrived at {}, {}, {}",
+                        order.target_tile.0, order.target_tile.1, order.target_tile.2
                     ));
                     ui_dirty = true;
                 }
@@ -1391,7 +1395,7 @@ impl GameState {
             return;
         };
 
-        match MoveOrder::for_target(current_position, target_world) {
+        match MoveOrder::for_target(current_position, target_tile) {
             Some(order) => {
                 if let Some(slot) = self.active_orders.get_mut(selected_index) {
                     *slot = Some(order.clone());
@@ -1406,8 +1410,8 @@ impl GameState {
                     *slot = None;
                 }
                 self.selected_order = Some(format!(
-                    "already at {:.1}, {:.1}, {:.1}",
-                    target_world.x, target_world.y, target_world.z
+                    "already at {}, {}, {}",
+                    target_tile.0, target_tile.1, target_tile.2
                 ));
             }
         }
