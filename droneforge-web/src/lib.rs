@@ -1337,6 +1337,24 @@ impl GameState {
         }
     }
 
+    fn tile_coords_from_world(target_world: Vec3) -> (i32, i32, i32) {
+        (
+            target_world.x.floor() as i32,
+            target_world.y.floor() as i32,
+            target_world.z.floor() as i32,
+        )
+    }
+
+    fn tile_blocked(chunk_cache: &ChunkCache, coords: (i32, i32, i32)) -> bool {
+        let (target_tile_x, target_tile_y, target_tile_z) = coords;
+        is_solid_opt(block_at(
+            chunk_cache,
+            target_tile_x,
+            target_tile_y,
+            target_tile_z,
+        ))
+    }
+
     fn handle_move_target_click(&mut self) {
         let Some(selected_index) = self.selected_drone else {
             self.exit_move_mode();
@@ -1349,6 +1367,23 @@ impl GameState {
         let target_world = self.screen_to_world(screen_pos, effective_block_size);
 
         self.ensure_order_capacity();
+
+        let target_tile = Self::tile_coords_from_world(target_world);
+        if Self::tile_blocked(&self.chunk_cache, target_tile) {
+            let mut status = format!(
+                "blocked by wall at {}, {}, {}",
+                target_tile.0, target_tile.1, target_tile.2
+            );
+            if let Some(existing) = self.order_status_for(selected_index) {
+                status.push_str("; still ");
+                status.push_str(&existing);
+            }
+            self.selected_order = Some(status);
+            self.exit_move_mode();
+            self.sync_selected_ui();
+            return;
+        }
+
         let current_position = if let Some(drone) = self.world.drones().get(selected_index) {
             Vec3::new(drone.position[0], drone.position[1], drone.position[2])
         } else {
@@ -1434,6 +1469,24 @@ impl GameState {
     fn exit_move_mode(&mut self) {
         self.selection_mode = SelectionMode::Inspect;
         set_move_mode_active(false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tile_blocked_detects_walls_and_air() {
+        let generator = DeterministicMap::new(42);
+        let mut chunk_cache = ChunkCache::new();
+
+        // Populate the chunks that cover the target test coordinates.
+        chunk_cache.populate_chunk_at(&generator, ChunkPosition::new(0, 0, 0));
+        chunk_cache.populate_chunk_at(&generator, ChunkPosition::new(0, 0, 2));
+
+        assert!(GameState::tile_blocked(&chunk_cache, (1, 0, 0))); // stone/iron terrain
+        assert!(!GameState::tile_blocked(&chunk_cache, (0, 0, 10))); // generated air
     }
 }
 
