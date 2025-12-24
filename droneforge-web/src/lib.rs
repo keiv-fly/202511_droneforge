@@ -521,7 +521,7 @@ impl GameState {
             Image::gen_image_color(chunk_width_px, chunk_depth_px, Color::from_rgba(0, 0, 0, 0));
         let mut world = World::new();
         world.set_drones(vec![DronePose::new(
-            [0.0, -1.0, 0.0],
+            [0.0, 0.0, 0.0],
             [1.0, 0.0],
             "d1",
             10,
@@ -610,15 +610,17 @@ impl GameState {
             let screen_center_x = screen_width() / 2.0;
             let screen_center_y = screen_height() / 2.0;
 
-            // Set camera offset so world (0, 0) is at screen center
+            // Set camera offset so the center of tile (0, 0) is at screen center
             // screen_x = (world_x - VIEW_MIN_X) * effective_block_size + camera_offset_x
-            // For world (0, 0) at screen center:
-            // screen_center_x = (0 - VIEW_MIN_X) * effective_block_size + camera_offset_x
-            // camera_offset_x = screen_center_x - (0 - VIEW_MIN_X) * effective_block_size
-            self.camera_offset_x =
-                screen_center_x - (0.0 - VIEW_MIN_X as f32) * effective_block_size;
-            self.camera_offset_y =
-                screen_center_y - (0.0 - VIEW_MIN_Y as f32) * effective_block_size;
+            // For the center of tile (0, 0) at screen center, we need to offset by half a block:
+            // screen_center_x = (0 - VIEW_MIN_X) * effective_block_size + effective_block_size / 2.0 + camera_offset_x
+            // camera_offset_x = screen_center_x - (0 - VIEW_MIN_X) * effective_block_size - effective_block_size / 2.0
+            self.camera_offset_x = screen_center_x
+                - (0.0 - VIEW_MIN_X as f32) * effective_block_size
+                - effective_block_size / 2.0;
+            self.camera_offset_y = screen_center_y
+                - (0.0 - VIEW_MIN_Y as f32) * effective_block_size
+                - effective_block_size / 2.0;
 
             self.camera_initialized = true;
         }
@@ -1102,10 +1104,12 @@ impl GameState {
         );
 
         let (mouse_x, mouse_y) = mouse_position();
-        let tile_x =
-            (((mouse_x - self.camera_offset_x) / effective_block_size) + VIEW_MIN_X as f32) as i32;
-        let tile_y =
-            (((mouse_y - self.camera_offset_y) / effective_block_size) + VIEW_MIN_Y as f32) as i32;
+        let tile_x = ((((mouse_x - self.camera_offset_x) / effective_block_size)
+            + VIEW_MIN_X as f32)
+            .floor()) as i32;
+        let tile_y = ((((mouse_y - self.camera_offset_y) / effective_block_size)
+            + VIEW_MIN_Y as f32)
+            .floor()) as i32;
         let tile_z = self.view_z;
 
         draw_text(
