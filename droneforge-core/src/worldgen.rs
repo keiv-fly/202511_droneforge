@@ -27,6 +27,13 @@ impl DeterministicMap {
             return AIR;
         }
 
+        // Ensure (1,0,0) and (2,0,0) are always air
+        if (coord.x == 1 && coord.y == 0 && coord.z == 0)
+            || (coord.x == 2 && coord.y == 0 && coord.z == 0)
+        {
+            return AIR;
+        }
+
         if shifted.z == VERTICAL_LIMIT {
             return AIR;
         }
@@ -189,5 +196,12 @@ mod tests {
             chunk.get_block(local_ore).unwrap(),
             generator.block_at(WorldCoord::new(10, 0, 0))
         );
+    }
+
+    #[test]
+    fn ensures_specific_coordinates_are_air() {
+        let generator = map();
+        assert_eq!(generator.block_at(WorldCoord::new(1, 0, 0)), AIR);
+        assert_eq!(generator.block_at(WorldCoord::new(2, 0, 0)), AIR);
     }
 }
