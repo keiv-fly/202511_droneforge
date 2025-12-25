@@ -11,6 +11,7 @@ const CHUNK_BLOCKS: usize = CHUNK_WIDTH * CHUNK_DEPTH * CHUNK_HEIGHT;
 pub struct ChunkBlocks {
     pub position: ChunkPosition,
     pub blocks: Vec<BlockId>,
+    pub changed: bool,
 }
 
 impl ChunkBlocks {
@@ -18,7 +19,11 @@ impl ChunkBlocks {
         if blocks.len() != CHUNK_BLOCKS {
             return Err(ChunkError::InvalidBlockCount(blocks.len()));
         }
-        Ok(Self { position, blocks })
+        Ok(Self {
+            position,
+            blocks,
+            changed: false,
+        })
     }
 }
 
@@ -64,6 +69,7 @@ impl Chunk {
         ChunkBlocks {
             position: self.position,
             blocks: self.blocks.clone(),
+            changed: false,
         }
     }
 

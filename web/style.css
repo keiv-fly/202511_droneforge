@@ -155,6 +155,26 @@ canvas#glcanvas {
   white-space: pre-line;
 }
 
+.selection-progress {
+  width: 180px;
+  display: none;
+}
+
+.selection-progress-track {
+  width: 100%;
+  height: 10px;
+  border: 1px solid #ffffff;
+  border-radius: 4px;
+  background: transparent;
+  overflow: hidden;
+}
+
+.selection-progress-fill {
+  width: 0;
+  height: 100%;
+  background: #ffffff;
+}
+
 .selection-actions {
   display: flex;
   gap: 10px;

@@ -26,6 +26,13 @@ window.addEventListener("load", () => {
     const selectionText = document.getElementById("selection-text");
     const selectionMove = document.getElementById("selection-move");
     const selectionUse = document.getElementById("selection-use");
+    const selectionProgress = document.getElementById("selection-progress");
+    const selectionProgressTrack = document.getElementById(
+        "selection-progress-track"
+    );
+    const selectionProgressFill = document.getElementById(
+        "selection-progress-fill"
+    );
 
     if (canvas) {
         canvas.addEventListener("contextmenu", (event) => {
@@ -73,12 +80,48 @@ window.addEventListener("load", () => {
             if (selectionPanel) {
                 selectionPanel.style.display = "flex";
             }
+
+            const progressVisibleFn = wasm_exports?.selected_drone_progress_visible;
+            const progressPercentFn = wasm_exports?.selected_drone_progress_percent;
+            const showProgress =
+                typeof progressVisibleFn === "function" &&
+                progressVisibleFn() === 1;
+
+            if (selectionProgress && selectionProgressFill) {
+                if (showProgress) {
+                    const percent =
+                        typeof progressPercentFn === "function"
+                            ? progressPercentFn()
+                            : 0;
+                    selectionProgress.style.display = "block";
+                    selectionProgressFill.style.width = `${percent}%`;
+                    if (selectionProgressTrack) {
+                        selectionProgressTrack.setAttribute(
+                            "aria-valuenow",
+                            `${percent}`
+                        );
+                    }
+                } else {
+                    selectionProgress.style.display = "none";
+                    selectionProgressFill.style.width = "0%";
+                    if (selectionProgressTrack) {
+                        selectionProgressTrack.setAttribute("aria-valuenow", "0");
+                    }
+                }
+            }
         } else {
             if (selectionPanel) {
                 selectionPanel.style.display = "none";
             }
             if (selectionText) {
                 selectionText.textContent = "";
+            }
+            if (selectionProgress && selectionProgressFill) {
+                selectionProgress.style.display = "none";
+                selectionProgressFill.style.width = "0%";
+                if (selectionProgressTrack) {
+                    selectionProgressTrack.setAttribute("aria-valuenow", "0");
+                }
             }
         }
 
@@ -90,6 +133,17 @@ window.addEventListener("load", () => {
             selectionMove.setAttribute(
                 "aria-pressed",
                 moveIsActive ? "true" : "false"
+            );
+        }
+
+        const useActiveFn = wasm_exports?.use_mode_active;
+        const useIsActive =
+            typeof useActiveFn === "function" && useActiveFn() === 1;
+        if (selectionUse) {
+            selectionUse.classList.toggle("is-active", useIsActive);
+            selectionUse.setAttribute(
+                "aria-pressed",
+                useIsActive ? "true" : "false"
             );
         }
         requestAnimationFrame(pumpSelectionUi);

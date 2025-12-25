@@ -1,5 +1,5 @@
 use crate::block::{AIR, BlockId};
-use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkError};
+use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkBlocks, ChunkError};
 use crate::coordinates::{ChunkPosition, LocalBlockCoord, WorldCoord};
 use crate::linecast::first_solid_supercover;
 use crate::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
@@ -12,10 +12,15 @@ pub struct CachedChunk {
     pub palette: Vec<BlockId>,
     blocks: Vec<u64>,
     bits_per_index: u8,
+    changed: bool,
 }
 
 impl CachedChunk {
     pub fn from_chunk(chunk: &Chunk) -> Self {
+        Self::from_chunk_with_changed(chunk, false)
+    }
+
+    pub fn from_chunk_with_changed(chunk: &Chunk, changed: bool) -> Self {
         let (palette, palette_indices) = build_palette(chunk.blocks());
         let bits_per_index = bits_required(palette.len());
         let blocks = pack_blocks(chunk.blocks(), &palette_indices, bits_per_index);
@@ -25,6 +30,7 @@ impl CachedChunk {
             palette,
             blocks,
             bits_per_index,
+            changed,
         }
     }
 
@@ -44,12 +50,17 @@ impl CachedChunk {
             .copied()
             .ok_or(ChunkError::InvalidBlockCount(palette_index as usize))
     }
+
+    pub fn changed(&self) -> bool {
+        self.changed
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ChunkCache {
     chunks: HashMap<ChunkPosition, CachedChunk>,
     reusable_chunk: Chunk,
+    last_save_ms: Option<f64>,
 }
 
 impl ChunkCache {
@@ -61,6 +72,7 @@ impl ChunkCache {
         Self {
             chunks: HashMap::with_capacity(capacity),
             reusable_chunk: Chunk::new(ChunkPosition::new(0, 0, 0), AIR),
+            last_save_ms: None,
         }
     }
 
@@ -177,6 +189,30 @@ impl ChunkCache {
             .and_then(|chunk| chunk.get_block(local).ok())
     }
 
+    pub fn set_block(&mut self, coord: WorldCoord, block: BlockId) -> Result<(), ChunkError> {
+        let (chunk_pos, local) = chunk_and_local_for_world_coord(coord);
+        let Some(existing) = self.chunks.get(&chunk_pos) else {
+            return Err(ChunkError::OutOfBounds);
+        };
+
+        let mut chunk = chunk_from_cached(existing)?;
+        chunk.set_block(local, block)?;
+
+        let updated = CachedChunk::from_chunk_with_changed(&chunk, true);
+        self.chunks.insert(chunk_pos, updated);
+        Ok(())
+    }
+
+    pub fn last_save_ms(&self) -> Option<f64> {
+        self.last_save_ms
+    }
+
+    pub fn record_save_time_ms(&mut self, ms: f64) {
+        if ms.is_finite() && ms >= 0.0 {
+            self.last_save_ms = Some(ms);
+        }
+    }
+
     /// Returns the first solid block encountered along the line from `start` to `end`,
     /// using a supercover Bresenham traversal across the XY plane. The start tile is
     /// ignored, allowing a drone to move out of its current tile even if occupied.
@@ -283,6 +319,32 @@ fn chunk_and_local_for_world_coord(coord: WorldCoord) -> (ChunkPosition, LocalBl
         ChunkPosition::new(chunk_x, chunk_y, chunk_z),
         LocalBlockCoord::new(local_x, local_y, local_z),
     )
+}
+
+fn chunkblocks_from_cached(cached: &CachedChunk) -> Vec<BlockId> {
+    let mut blocks = Vec::with_capacity(CHUNK_WIDTH * CHUNK_DEPTH * CHUNK_HEIGHT);
+    for z in 0..CHUNK_HEIGHT {
+        for y in 0..CHUNK_DEPTH {
+            for x in 0..CHUNK_WIDTH {
+                let coord = LocalBlockCoord::new(x, y, z);
+                let block = cached.get_block(coord).unwrap_or(AIR);
+                blocks.push(block);
+            }
+        }
+    }
+    blocks
+}
+
+fn chunk_from_cached(cached: &CachedChunk) -> Result<Chunk, ChunkError> {
+    let mut chunk = Chunk::new(cached.position, AIR);
+    let blocks = chunkblocks_from_cached(cached);
+    let blocks_struct = ChunkBlocks {
+        position: cached.position,
+        blocks,
+        changed: cached.changed,
+    };
+    chunk.apply_block_save(&blocks_struct)?;
+    Ok(chunk)
 }
 
 fn chunk_range_bounds(
@@ -399,6 +461,38 @@ mod tests {
         let coord = WorldCoord::new(0, 0, 0);
         let expected = generator.block_at(coord);
         assert_eq!(cache.block_at_world(coord), Some(expected));
+    }
+
+    #[test]
+    fn set_block_updates_changed_chunks_and_time() {
+        let generator = DeterministicMap::new(3);
+        let mut cache = ChunkCache::new();
+        cache.populate_within_limits(&generator, CHUNK_WIDTH as i32, CHUNK_HEIGHT as i32);
+
+        let coord = WorldCoord::new(0, 0, 0);
+        let original = cache.block_at_world(coord).expect("block should exist");
+
+        cache.set_block(coord, AIR).unwrap();
+        assert_eq!(cache.block_at_world(coord), Some(AIR));
+        cache.record_save_time_ms(1.5);
+        assert_eq!(cache.last_save_ms(), Some(1.5));
+        assert!(
+            cache
+                .chunk(&ChunkPosition::new(0, 0, 0))
+                .map(|c| c.changed())
+                .unwrap_or(false)
+        );
+
+        cache.set_block(coord, original).unwrap();
+        assert_eq!(cache.block_at_world(coord), Some(original));
+        cache.record_save_time_ms(0.0);
+        assert_eq!(cache.last_save_ms(), Some(0.0));
+        assert!(
+            cache
+                .chunk(&ChunkPosition::new(0, 0, 0))
+                .map(|c| c.changed())
+                .unwrap_or(false)
+        );
     }
 
     #[test]

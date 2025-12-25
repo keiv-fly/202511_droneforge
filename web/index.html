@@ -29,6 +29,11 @@
   </div>
   <div id="selection-panel" class="selection-panel" aria-live="polite">
     <div id="selection-text" class="selection-text"></div>
+    <div id="selection-progress" class="selection-progress" aria-hidden="true">
+      <div id="selection-progress-track" class="selection-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="selection-progress-fill" class="selection-progress-fill"></div>
+      </div>
+    </div>
     <div class="selection-actions">
       <button type="button" id="selection-move" class="selection-btn">move</button>
       <button type="button" id="selection-use" class="selection-btn">use</button>

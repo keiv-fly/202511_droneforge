@@ -44,6 +44,8 @@ static PENDING_Z_DELTA: AtomicI32 = AtomicI32::new(0);
 
 static PENDING_MOVE_TOGGLE: AtomicBool = AtomicBool::new(false);
 static MOVE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PENDING_USE_TOGGLE: AtomicBool = AtomicBool::new(false);
+static USE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
 static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
@@ -55,6 +57,8 @@ struct SelectedDroneUi {
     health: i32,
     max_health: i32,
     status: String,
+    progress_percent: u32,
+    progress_visible: bool,
 }
 
 fn selected_drone_ui() -> &'static Mutex<SelectedDroneUi> {
@@ -154,6 +158,26 @@ pub extern "C" fn selected_drone_health_max() -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_progress_visible() -> i32 {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present && ui.progress_visible {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_drone_progress_percent() -> u32 {
+    let ui = selected_drone_ui().lock().unwrap();
+    if ui.present && ui.progress_visible {
+        ui.progress_percent
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn drone_action_move() {
     log_ui_action("drone action: move");
     PENDING_MOVE_TOGGLE.store(true, Ordering::SeqCst);
@@ -162,11 +186,21 @@ pub extern "C" fn drone_action_move() {
 #[unsafe(no_mangle)]
 pub extern "C" fn drone_action_use() {
     log_ui_action("drone action: use");
+    PENDING_USE_TOGGLE.store(true, Ordering::SeqCst);
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn move_mode_active() -> i32 {
     if MOVE_MODE_ACTIVE.load(Ordering::SeqCst) {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn use_mode_active() -> i32 {
+    if USE_MODE_ACTIVE.load(Ordering::SeqCst) {
         1
     } else {
         0
@@ -198,6 +232,14 @@ fn take_pending_move_toggle() -> bool {
 
 fn set_move_mode_active(active: bool) {
     MOVE_MODE_ACTIVE.store(active, Ordering::SeqCst);
+}
+
+fn take_pending_use_toggle() -> bool {
+    PENDING_USE_TOGGLE.swap(false, Ordering::SeqCst)
+}
+
+fn set_use_mode_active(active: bool) {
+    USE_MODE_ACTIVE.store(active, Ordering::SeqCst);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -262,6 +304,7 @@ struct TileSet {
 enum SelectionMode {
     Inspect,
     MoveTarget,
+    UseTarget,
 }
 
 impl Default for SelectionMode {
@@ -312,6 +355,76 @@ impl MoveOrder {
             self.delta_per_sec.y,
             self.delta_per_sec.z
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Order {
+    Move(MoveOrder),
+    Dig(DigOrder),
+}
+
+impl Order {
+    fn status_text(&self) -> String {
+        match self {
+            Order::Move(order) => order.status_text(),
+            Order::Dig(order) => order.status_text(),
+        }
+    }
+
+    fn progress_percent(&self) -> Option<u32> {
+        match self {
+            Order::Move(_) => None,
+            Order::Dig(order) => Some(order.progress_percent()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DigOrder {
+    target_tile: (i32, i32, i32),
+    elapsed: f32,
+    duration: f32,
+}
+
+impl DigOrder {
+    fn new(target_tile: (i32, i32, i32)) -> Self {
+        Self {
+            target_tile,
+            elapsed: 0.0,
+            duration: 5.0,
+        }
+    }
+
+    fn progress_fraction(&self) -> f32 {
+        (self.elapsed / self.duration).clamp(0.0, 1.0)
+    }
+
+    fn progress_percent(&self) -> u32 {
+        if self.elapsed >= self.duration {
+            return 100;
+        }
+        let stepped = ((self.progress_fraction() * 100.0) / 5.0).floor() as u32 * 5;
+        stepped.min(100)
+    }
+
+    fn status_text(&self) -> String {
+        format!(
+            "digging wall at {}, {}, {} ({}%)",
+            self.target_tile.0,
+            self.target_tile.1,
+            self.target_tile.2,
+            self.progress_percent()
+        )
+    }
+
+    fn advance(&mut self, delta_seconds: f32) -> (bool, bool) {
+        let before = self.progress_percent();
+        self.elapsed = (self.elapsed + delta_seconds).min(self.duration);
+        let after = self.progress_percent();
+        let progressed = after != before;
+        let completed = self.elapsed >= self.duration - f32::EPSILON;
+        (completed, progressed)
     }
 }
 
@@ -468,7 +581,7 @@ pub struct GameState {
     selection_mode: SelectionMode,
     selected_drone: Option<usize>,
     selected_order: Option<String>,
-    active_orders: Vec<Option<MoveOrder>>,
+    active_orders: Vec<Option<Order>>,
     render_chunk_xs: Vec<i32>,
     render_chunk_ys: Vec<i32>,
     world_chunk_xs: Vec<i32>,
@@ -574,6 +687,7 @@ impl GameState {
         debug_assert!(game.drone_sprites.sprite_size() > 0.0);
 
         set_move_mode_active(false);
+        set_use_mode_active(false);
 
         game.prime_chunk_cache_queue();
 
@@ -948,29 +1062,62 @@ impl GameState {
         for index in 0..drone_count {
             let Some(order) = self
                 .active_orders
-                .get(index)
-                .and_then(|order| order.as_ref())
-                .cloned()
+                .get_mut(index)
+                .and_then(|slot| slot.take())
             else {
                 continue;
             };
 
-            let arrived = if let Some(drone) = self.world.drones_mut().get_mut(index) {
-                Self::advance_single_drone(drone, &order, delta_seconds)
-            } else {
-                false
-            };
+            let mut keep_order: Option<Order> = None;
 
-            if arrived {
-                if let Some(slot) = self.active_orders.get_mut(index) {
-                    *slot = None;
+            match order {
+                Order::Move(move_order) => {
+                    let arrived = if let Some(drone) = self.world.drones_mut().get_mut(index) {
+                        Self::advance_single_drone(drone, &move_order, delta_seconds)
+                    } else {
+                        false
+                    };
+
+                    if arrived {
+                        if self.selected_drone == Some(index) {
+                            self.selected_order = Some(format!(
+                                "arrived at {}, {}, {}",
+                                move_order.target_tile.0,
+                                move_order.target_tile.1,
+                                move_order.target_tile.2
+                            ));
+                            ui_dirty = true;
+                        }
+                    } else {
+                        keep_order = Some(Order::Move(move_order));
+                    }
                 }
-                if self.selected_drone == Some(index) {
-                    self.selected_order = Some(format!(
-                        "arrived at {}, {}, {}",
-                        order.target_tile.0, order.target_tile.1, order.target_tile.2
-                    ));
-                    ui_dirty = true;
+                Order::Dig(mut dig_order) => {
+                    let (completed, progressed) = dig_order.advance(delta_seconds);
+                    if progressed && self.selected_drone == Some(index) {
+                        self.selected_order = Some(dig_order.status_text());
+                        ui_dirty = true;
+                    }
+
+                    if completed {
+                        let target = dig_order.target_tile;
+                        self.finish_dig(target);
+                        if self.selected_drone == Some(index) {
+                            self.selected_order = Some(format!(
+                                "finished digging at {}, {}, {}",
+                                target.0, target.1, target.2
+                            ));
+                            ui_dirty = true;
+                        }
+                    } else {
+                        keep_order = Some(Order::Dig(dig_order));
+                    }
+                }
+            }
+
+            if let Some(order) = keep_order {
+                if let Some(slot) = self.active_orders.get_mut(index) {
+                    *slot = Some(order);
                 }
             }
         }
@@ -1012,6 +1159,20 @@ impl GameState {
             Self::apply_heading_from_direction(drone, order.direction);
             false
         }
+    }
+
+    fn finish_dig(&mut self, target: (i32, i32, i32)) {
+        let start = get_time();
+        let coord = WorldCoord::new(target.0, target.1, target.2);
+        if let Err(err) = self.chunk_cache.set_block(coord, AIR) {
+            #[cfg(not(target_arch = "wasm32"))]
+            eprintln!("failed to save dug block: {:?}", err);
+            self.selected_order = Some("failed to save dug block".to_string());
+            return;
+        }
+        let elapsed_ms = (get_time() - start) * 1000.0;
+        self.chunk_cache.record_save_time_ms(elapsed_ms);
+        self.rendered_level_dirty = true;
     }
 
     fn render(&mut self) {
@@ -1095,10 +1256,17 @@ impl GameState {
         };
         draw_text(&cache_avg_text, 20.0, 112.0, 24.0, WHITE);
 
+        let override_text = if let Some(ms) = self.chunk_cache.last_save_ms() {
+            format!("chunk save: {:.3} ms", ms)
+        } else {
+            "chunk save: -- ms".to_string()
+        };
+        draw_text(&override_text, 20.0, 136.0, 24.0, WHITE);
+
         draw_text(
             &format!("zoom power: {}", self.zoom_power),
             20.0,
-            136.0,
+            160.0,
             24.0,
             WHITE,
         );
@@ -1115,7 +1283,7 @@ impl GameState {
         draw_text(
             &format!("mouse: {}, {}, {}", tile_x, tile_y, tile_z),
             20.0,
-            160.0,
+            184.0,
             24.0,
             WHITE,
         );
@@ -1133,21 +1301,21 @@ impl GameState {
                 center_tile_x, center_tile_y, self.view_z
             ),
             20.0,
-            184.0,
+            208.0,
             24.0,
             WHITE,
         );
 
-        draw_text(&format!("z: {}", self.view_z), 20.0, 208.0, 24.0, WHITE);
+        draw_text(&format!("z: {}", self.view_z), 20.0, 232.0, 24.0, WHITE);
         draw_text(
             &format!("zoom: {:.2}x", normalized_zoom),
             20.0,
-            232.0,
+            256.0,
             24.0,
             WHITE,
         );
 
-        draw_text(&format!("fps: {:.1}", self.fps), 20.0, 256.0, 24.0, WHITE);
+        draw_text(&format!("fps: {:.1}", self.fps), 20.0, 280.0, 24.0, WHITE);
     }
 
     fn render_drones(&self, effective_block_size: f32) {
@@ -1269,13 +1437,28 @@ impl GameState {
             if self.selection_mode == SelectionMode::MoveTarget {
                 self.exit_move_mode();
             } else if self.selected_drone.is_some() {
+                self.exit_use_mode();
                 self.selection_mode = SelectionMode::MoveTarget;
                 set_move_mode_active(true);
             }
         }
 
+        if take_pending_use_toggle() {
+            if self.selection_mode == SelectionMode::UseTarget {
+                self.exit_use_mode();
+            } else if self.selected_drone.is_some() {
+                self.exit_move_mode();
+                self.selection_mode = SelectionMode::UseTarget;
+                set_use_mode_active(true);
+            }
+        }
+
         if self.selection_mode == SelectionMode::MoveTarget && self.selected_drone.is_none() {
             self.exit_move_mode();
+        }
+
+        if self.selection_mode == SelectionMode::UseTarget && self.selected_drone.is_none() {
+            self.exit_use_mode();
         }
     }
 
@@ -1304,6 +1487,7 @@ impl GameState {
         match self.selection_mode {
             SelectionMode::Inspect => self.apply_selection_click(),
             SelectionMode::MoveTarget => self.handle_move_target_click(),
+            SelectionMode::UseTarget => self.handle_use_target_click(),
         }
     }
 
@@ -1319,6 +1503,13 @@ impl GameState {
             .get(index)
             .and_then(|order| order.as_ref())
             .map(|order| order.status_text())
+    }
+
+    fn order_progress_percent(&self, index: usize) -> Option<u32> {
+        self.active_orders
+            .get(index)
+            .and_then(|order| order.as_ref())
+            .and_then(|order| order.progress_percent())
     }
 
     fn apply_selection_click(&mut self) {
@@ -1361,6 +1552,14 @@ impl GameState {
             target_tile_y,
             target_tile_z,
         ))
+    }
+
+    fn wall_adjacent_to_air(&self, target_tile: (i32, i32, i32)) -> bool {
+        let (x, y, z) = target_tile;
+        let neighbours = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)];
+        neighbours
+            .iter()
+            .any(|(nx, ny)| !is_solid_opt(block_at(&self.chunk_cache, *nx, *ny, z)))
     }
 
     fn handle_move_target_click(&mut self) {
@@ -1413,7 +1612,7 @@ impl GameState {
         match MoveOrder::for_target(current_position, target_tile) {
             Some(order) => {
                 if let Some(slot) = self.active_orders.get_mut(selected_index) {
-                    *slot = Some(order.clone());
+                    *slot = Some(Order::Move(order.clone()));
                 }
                 if let Some(drone) = self.world.drones_mut().get_mut(selected_index) {
                     Self::apply_heading_from_direction(drone, order.direction);
@@ -1431,6 +1630,81 @@ impl GameState {
             }
         }
         self.exit_move_mode();
+        self.sync_selected_ui();
+    }
+
+    fn handle_use_target_click(&mut self) {
+        let Some(selected_index) = self.selected_drone else {
+            self.exit_use_mode();
+            return;
+        };
+
+        let (mouse_x, mouse_y) = mouse_position();
+        let screen_pos = vec2(mouse_x, mouse_y);
+        let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
+        let target_world = self.screen_to_world(screen_pos, effective_block_size);
+
+        self.ensure_order_capacity();
+
+        let target_tile = Self::tile_coords_from_world(target_world);
+        let current_position = if let Some(drone) = self.world.drones().get(selected_index) {
+            Vec3::new(drone.position[0], drone.position[1], drone.position[2])
+        } else {
+            self.exit_use_mode();
+            return;
+        };
+        let drone_tile = Self::tile_coords_from_world(current_position);
+
+        let mut invalid_status: Option<String> = None;
+
+        if target_tile.2 != drone_tile.2 {
+            invalid_status = Some("can only dig on the current level".to_string());
+        } else {
+            let dx = target_tile.0 - drone_tile.0;
+            let dy = target_tile.1 - drone_tile.1;
+            let adjacent = dx.abs() <= 1 && dy.abs() <= 1 && !(dx == 0 && dy == 0);
+            if !adjacent {
+                invalid_status = Some("target must be adjacent to the drone".to_string());
+            } else {
+                let target_block = block_at(
+                    &self.chunk_cache,
+                    target_tile.0,
+                    target_tile.1,
+                    target_tile.2,
+                );
+                if !is_solid_opt(target_block) {
+                    invalid_status = Some("no wall to dig here".to_string());
+                } else if target_block == Some(BEDROCK) {
+                    invalid_status = Some("bedrock cannot be dug".to_string());
+                } else if dx != 0 && dy != 0 && !self.wall_adjacent_to_air(target_tile) {
+                    invalid_status =
+                        Some("diagonal walls must touch air to dig safely".to_string());
+                }
+            }
+        }
+
+        if let Some(status) = invalid_status {
+            self.selected_order = Some(status);
+            self.exit_use_mode();
+            self.sync_selected_ui();
+            return;
+        }
+
+        let direction = Vec3::new(
+            (target_tile.0 - drone_tile.0) as f32,
+            (target_tile.1 - drone_tile.1) as f32,
+            0.0,
+        );
+        let order = DigOrder::new(target_tile);
+
+        if let Some(slot) = self.active_orders.get_mut(selected_index) {
+            *slot = Some(Order::Dig(order.clone()));
+        }
+        if let Some(drone) = self.world.drones_mut().get_mut(selected_index) {
+            Self::apply_heading_from_direction(drone, direction);
+        }
+        self.selected_order = Some(order.status_text());
+        self.exit_use_mode();
         self.sync_selected_ui();
     }
 
@@ -1471,8 +1745,17 @@ impl GameState {
                 ui.health = drone.health;
                 ui.max_health = drone.max_health;
                 ui.status.clear();
-                if let Some(order) = &self.selected_order {
+                if let Some(order_status) = self.order_status_for(selected_index) {
+                    ui.status.push_str(&order_status);
+                } else if let Some(order) = &self.selected_order {
                     ui.status.push_str(order);
+                }
+                if let Some(progress) = self.order_progress_percent(selected_index) {
+                    ui.progress_visible = true;
+                    ui.progress_percent = progress;
+                } else {
+                    ui.progress_visible = false;
+                    ui.progress_percent = 0;
                 }
                 return;
             }
@@ -1483,11 +1766,18 @@ impl GameState {
         ui.health = 0;
         ui.max_health = 0;
         ui.status.clear();
+        ui.progress_visible = false;
+        ui.progress_percent = 0;
     }
 
     fn exit_move_mode(&mut self) {
         self.selection_mode = SelectionMode::Inspect;
         set_move_mode_active(false);
+    }
+
+    fn exit_use_mode(&mut self) {
+        self.selection_mode = SelectionMode::Inspect;
+        set_use_mode_active(false);
     }
 }
 
@@ -1506,6 +1796,27 @@ mod tests {
 
         assert!(GameState::tile_blocked(&chunk_cache, (3, 0, 0))); // stone/iron terrain
         assert!(!GameState::tile_blocked(&chunk_cache, (0, 0, 10))); // generated air
+    }
+
+    #[test]
+    fn dig_order_reports_progress_in_steps() {
+        let mut order = DigOrder::new((0, 0, 0));
+
+        assert_eq!(order.progress_percent(), 0);
+        let (completed_first, progressed_first) = order.advance(0.2);
+        assert!(!completed_first);
+        assert!(!progressed_first);
+        assert_eq!(order.progress_percent(), 0);
+
+        let (completed_second, progressed_second) = order.advance(0.05);
+        assert!(!completed_second);
+        assert!(progressed_second);
+        assert_eq!(order.progress_percent(), 5);
+
+        let (completed_final, progressed_final) = order.advance(5.0);
+        assert!(completed_final);
+        assert!(progressed_final);
+        assert_eq!(order.progress_percent(), 100);
     }
 }
 

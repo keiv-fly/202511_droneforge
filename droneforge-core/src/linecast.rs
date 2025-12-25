@@ -1,4 +1,4 @@
-use crate::block::{BlockId, AIR};
+use crate::block::{AIR, BlockId};
 use crate::coordinates::WorldCoord;
 
 fn is_solid(block: Option<BlockId>) -> bool {
@@ -90,4 +90,3 @@ where
 
     None
 }
-
