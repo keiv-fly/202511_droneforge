@@ -7,6 +7,15 @@ function forwardZChange(callbackName) {
 
 const selectionDecoder = new TextDecoder("utf-8");
 
+const INVENTORY_SLOTS = 10;
+const TILESET_SRC = "assets/tileset.png";
+const tilesetImage = new Image();
+tilesetImage.src = TILESET_SRC;
+let tilesetReady = false;
+tilesetImage.onload = () => {
+    tilesetReady = true;
+};
+
 function readWasmString(ptr, len) {
     if (!wasm_memory || !ptr || len <= 0) return "";
     try {
@@ -26,6 +35,9 @@ window.addEventListener("load", () => {
     const selectionText = document.getElementById("selection-text");
     const selectionMove = document.getElementById("selection-move");
     const selectionUse = document.getElementById("selection-use");
+    const selectionTool = document.getElementById("selection-tool");
+    const inventoryPanel = document.getElementById("inventory-panel");
+    const inventoryGrid = document.getElementById("inventory-grid");
     const selectionProgress = document.getElementById("selection-progress");
     const selectionProgressTrack = document.getElementById(
         "selection-progress-track"
@@ -33,6 +45,9 @@ window.addEventListener("load", () => {
     const selectionProgressFill = document.getElementById(
         "selection-progress-fill"
     );
+    const inventoryCanvases = [];
+    const inventoryCounts = [];
+    let inventoryVisible = false;
 
     if (canvas) {
         canvas.addEventListener("contextmenu", (event) => {
@@ -47,6 +62,104 @@ window.addEventListener("load", () => {
     zDown.addEventListener("click", () => {
         forwardZChange("z_level_down");
     });
+
+    if (inventoryGrid) {
+        for (let i = 0; i < INVENTORY_SLOTS; i += 1) {
+            const slot = document.createElement("div");
+            slot.className = "inventory-slot";
+
+            const canvas = document.createElement("canvas");
+            canvas.className = "inventory-icon";
+            canvas.width = 42;
+            canvas.height = 42;
+
+            const count = document.createElement("div");
+            count.className = "inventory-count";
+
+            slot.append(canvas, count);
+            inventoryGrid.appendChild(slot);
+            inventoryCanvases.push(canvas);
+            inventoryCounts.push(count);
+        }
+    }
+
+    const tileSizeFromWasm = () => {
+        const fn = wasm_exports?.block_tile_size;
+        return typeof fn === "function" ? fn() : 16;
+    };
+
+    const renderInventorySlots = () => {
+        const blockFn = wasm_exports?.selected_drone_inventory_slot_block;
+        const countFn = wasm_exports?.selected_drone_inventory_slot_count;
+        const tileXFn = wasm_exports?.block_tile_pixel_x;
+        const tileYFn = wasm_exports?.block_tile_pixel_y;
+        const tileSize = tileSizeFromWasm();
+
+        for (let i = 0; i < INVENTORY_SLOTS; i += 1) {
+            const block =
+                typeof blockFn === "function" ? blockFn(i) : 0;
+            const count =
+                typeof countFn === "function" ? countFn(i) : 0;
+            const canvas = inventoryCanvases[i];
+            const countEl = inventoryCounts[i];
+
+            if (countEl) {
+                countEl.textContent = count > 0 ? `${count}` : "";
+            }
+
+            if (!canvas) continue;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) continue;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (!tilesetReady || block === 0 || count === 0) {
+                continue;
+            }
+
+            const tileX =
+                typeof tileXFn === "function" ? tileXFn(block) : -1;
+            const tileY =
+                typeof tileYFn === "function" ? tileYFn(block) : -1;
+
+            if (tileX < 0 || tileY < 0) {
+                continue;
+            }
+
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(
+                tilesetImage,
+                tileX,
+                tileY,
+                tileSize,
+                tileSize,
+                0,
+                0,
+                canvas.width,
+                canvas.height
+            );
+        }
+    };
+
+    const updateInventoryVisibility = (isPresent) => {
+        const shouldShow = inventoryVisible && isPresent;
+        if (inventoryPanel) {
+            inventoryPanel.classList.toggle("is-visible", shouldShow);
+            inventoryPanel.setAttribute(
+                "aria-hidden",
+                shouldShow ? "false" : "true"
+            );
+        }
+        if (selectionTool) {
+            selectionTool.classList.toggle("is-active", shouldShow);
+            selectionTool.setAttribute(
+                "aria-pressed",
+                shouldShow ? "true" : "false"
+            );
+        }
+        if (shouldShow) {
+            renderInventorySlots();
+        }
+    };
 
     const pumpSelectionUi = () => {
         const presentFn = wasm_exports?.selected_drone_present;
@@ -125,6 +238,8 @@ window.addEventListener("load", () => {
             }
         }
 
+        updateInventoryVisibility(isPresent);
+
         const moveActiveFn = wasm_exports?.move_mode_active;
         const moveIsActive =
             typeof moveActiveFn === "function" && moveActiveFn() === 1;
@@ -167,6 +282,20 @@ window.addEventListener("load", () => {
             const fn = wasm_exports?.drone_action_use;
             if (typeof fn === "function") {
                 fn();
+            }
+        });
+    }
+
+    if (selectionTool) {
+        selectionTool.disabled = false;
+        selectionTool.addEventListener("click", () => {
+            inventoryVisible = !inventoryVisible;
+            const presentFn = wasm_exports?.selected_drone_present;
+            const hasSelection =
+                typeof presentFn === "function" && presentFn() === 1;
+            updateInventoryVisibility(hasSelection);
+            if (inventoryVisible && hasSelection) {
+                renderInventorySlots();
             }
         });
     }

@@ -206,3 +206,55 @@ canvas#glcanvas {
   transform: translateY(1px) scale(0.98);
   background: #666;
 }
+
+.inventory-panel {
+  width: 100%;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inventory-panel.is-visible {
+  display: flex;
+}
+
+.inventory-header {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #dedede;
+}
+
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.inventory-slot {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  background: #555;
+  border: 1px solid #6a6a6a;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.inventory-icon {
+  width: 42px;
+  height: 42px;
+  image-rendering: pixelated;
+}
+
+.inventory-count {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 12px;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
