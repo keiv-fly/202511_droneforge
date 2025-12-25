@@ -5,3 +5,6 @@ members = [
     "d-gen-tileset",
 ]
 resolver = "2"
+default-members = [
+    "droneforge-web",
+]
