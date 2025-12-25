@@ -225,6 +225,13 @@ canvas#glcanvas {
   color: #dedede;
 }
 
+.inventory-selection {
+  min-height: 18px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: #f0f0f0;
+}
+
 .inventory-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -242,6 +249,14 @@ canvas#glcanvas {
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.inventory-slot:focus-visible {
+  outline: 2px solid #9ec8ff;
+  outline-offset: 2px;
 }
 
 .inventory-icon {

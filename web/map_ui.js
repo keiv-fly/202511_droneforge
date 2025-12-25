@@ -16,6 +16,21 @@ tilesetImage.onload = () => {
     tilesetReady = true;
 };
 
+const BLOCK_NAME_BY_ID = {
+    1: "dirt",
+    2: "stone",
+    3: "iron",
+    4: "bedrock",
+};
+
+const describeInventorySlot = (blockId, count) => {
+    if (!blockId || !count) {
+        return "Empty slot";
+    }
+    const name = BLOCK_NAME_BY_ID[blockId] || `block ${blockId}`;
+    return count > 1 ? `${name} x${count}` : name;
+};
+
 function readWasmString(ptr, len) {
     if (!wasm_memory || !ptr || len <= 0) return "";
     try {
@@ -38,6 +53,7 @@ window.addEventListener("load", () => {
     const selectionTool = document.getElementById("selection-tool");
     const inventoryPanel = document.getElementById("inventory-panel");
     const inventoryGrid = document.getElementById("inventory-grid");
+    const inventorySelection = document.getElementById("inventory-selection");
     const selectionProgress = document.getElementById("selection-progress");
     const selectionProgressTrack = document.getElementById(
         "selection-progress-track"
@@ -47,6 +63,10 @@ window.addEventListener("load", () => {
     );
     const inventoryCanvases = [];
     const inventoryCounts = [];
+    const inventorySlots = [];
+    const inventorySlotBlocks = Array(INVENTORY_SLOTS).fill(0);
+    const inventorySlotCounts = Array(INVENTORY_SLOTS).fill(0);
+    let lastSelectedSlot = null;
     let inventoryVisible = false;
 
     if (canvas) {
@@ -63,10 +83,36 @@ window.addEventListener("load", () => {
         forwardZChange("z_level_down");
     });
 
+    const clearInventorySelection = () => {
+        lastSelectedSlot = null;
+        if (inventorySelection) {
+            inventorySelection.textContent = "";
+        }
+    };
+
+    const updateInventorySelectionText = () => {
+        if (!inventorySelection) {
+            return;
+        }
+        if (lastSelectedSlot === null) {
+            inventorySelection.textContent = "";
+            return;
+        }
+        const block = inventorySlotBlocks[lastSelectedSlot] ?? 0;
+        const count = inventorySlotCounts[lastSelectedSlot] ?? 0;
+        inventorySelection.textContent = describeInventorySlot(block, count);
+    };
+
+    const handleInventorySlotClick = (slotIndex) => {
+        lastSelectedSlot = slotIndex;
+        updateInventorySelectionText();
+    };
+
     if (inventoryGrid) {
         for (let i = 0; i < INVENTORY_SLOTS; i += 1) {
             const slot = document.createElement("div");
             slot.className = "inventory-slot";
+            slot.tabIndex = 0;
 
             const canvas = document.createElement("canvas");
             canvas.className = "inventory-icon";
@@ -76,10 +122,19 @@ window.addEventListener("load", () => {
             const count = document.createElement("div");
             count.className = "inventory-count";
 
+            slot.addEventListener("click", () => handleInventorySlotClick(i));
+            slot.addEventListener("keydown", (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    handleInventorySlotClick(i);
+                }
+            });
+
             slot.append(canvas, count);
             inventoryGrid.appendChild(slot);
             inventoryCanvases.push(canvas);
             inventoryCounts.push(count);
+            inventorySlots.push(slot);
         }
     }
 
@@ -102,9 +157,17 @@ window.addEventListener("load", () => {
                 typeof countFn === "function" ? countFn(i) : 0;
             const canvas = inventoryCanvases[i];
             const countEl = inventoryCounts[i];
+            const slotEl = inventorySlots[i];
+
+            inventorySlotBlocks[i] = block;
+            inventorySlotCounts[i] = count;
 
             if (countEl) {
                 countEl.textContent = count > 0 ? `${count}` : "";
+            }
+
+            if (slotEl) {
+                slotEl.setAttribute("aria-label", describeInventorySlot(block, count));
             }
 
             if (!canvas) continue;
@@ -138,6 +201,8 @@ window.addEventListener("load", () => {
                 canvas.height
             );
         }
+
+        updateInventorySelectionText();
     };
 
     const updateInventoryVisibility = (isPresent) => {
@@ -155,6 +220,9 @@ window.addEventListener("load", () => {
                 "aria-pressed",
                 shouldShow ? "true" : "false"
             );
+        }
+        if (!shouldShow) {
+            clearInventorySelection();
         }
         if (shouldShow) {
             renderInventorySlots();
