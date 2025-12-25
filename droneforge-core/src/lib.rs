@@ -1,5 +1,6 @@
 pub mod block;
 pub mod chunk;
+pub mod linecast;
 pub mod chunk_cache;
 pub mod coordinates;
 pub mod drone;

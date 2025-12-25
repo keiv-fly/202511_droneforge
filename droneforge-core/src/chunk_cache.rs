@@ -1,6 +1,7 @@
 use crate::block::{AIR, BlockId};
 use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkError};
 use crate::coordinates::{ChunkPosition, LocalBlockCoord, WorldCoord};
+use crate::linecast::first_solid_supercover;
 use crate::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
@@ -176,6 +177,13 @@ impl ChunkCache {
             .and_then(|chunk| chunk.get_block(local).ok())
     }
 
+    /// Returns the first solid block encountered along the line from `start` to `end`,
+    /// using a supercover Bresenham traversal across the XY plane. The start tile is
+    /// ignored, allowing a drone to move out of its current tile even if occupied.
+    pub fn first_solid_on_line(&self, start: WorldCoord, end: WorldCoord) -> Option<WorldCoord> {
+        first_solid_supercover(|coord| self.block_at_world(coord), start, end)
+    }
+
     pub fn len(&self) -> usize {
         self.chunks.len()
     }
@@ -321,6 +329,26 @@ mod tests {
         LocalBlockCoord::new(x, y, z)
     }
 
+    fn cache_with_solid_blocks(coords: &[WorldCoord]) -> ChunkCache {
+        let mut chunks: HashMap<ChunkPosition, Chunk> = HashMap::new();
+
+        for &coord in coords {
+            let (chunk_pos, local) = chunk_and_local_for_world_coord(coord);
+            let chunk = chunks
+                .entry(chunk_pos)
+                .or_insert_with(|| Chunk::new(chunk_pos, AIR));
+            chunk.set_block(local, STONE).unwrap();
+        }
+
+        let mut cache = ChunkCache::new();
+        for (pos, chunk) in chunks {
+            let cached = CachedChunk::from_chunk(&chunk);
+            cache.chunks.insert(pos, cached);
+        }
+
+        cache
+    }
+
     #[test]
     fn single_palette_uses_no_storage() {
         let position = ChunkPosition::new(0, 0, 0);
@@ -431,5 +459,41 @@ mod tests {
             ChunkCache::chunk_count_for_limits(horizontal_limit, vertical_limit),
             expected
         );
+    }
+
+    #[test]
+    fn detects_collision_along_straight_line() {
+        let cache = cache_with_solid_blocks(&[WorldCoord::new(2, 0, 0)]);
+
+        let start = WorldCoord::new(0, 0, 0);
+        let end = WorldCoord::new(4, 0, 0);
+
+        assert_eq!(
+            cache.first_solid_on_line(start, end),
+            Some(WorldCoord::new(2, 0, 0))
+        );
+    }
+
+    #[test]
+    fn detects_diagonal_neighbour_collision_when_error_zero() {
+        let cache = cache_with_solid_blocks(&[WorldCoord::new(1, 0, 0)]);
+
+        let start = WorldCoord::new(0, 0, 0);
+        let end = WorldCoord::new(2, 2, 0);
+
+        assert_eq!(
+            cache.first_solid_on_line(start, end),
+            Some(WorldCoord::new(1, 0, 0))
+        );
+    }
+
+    #[test]
+    fn clear_path_returns_none() {
+        let cache = cache_with_solid_blocks(&[]);
+
+        let start = WorldCoord::new(-1, -1, 0);
+        let end = WorldCoord::new(3, 2, 0);
+
+        assert_eq!(cache.first_solid_on_line(start, end), None);
     }
 }

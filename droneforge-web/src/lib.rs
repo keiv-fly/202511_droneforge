@@ -1377,10 +1377,28 @@ impl GameState {
         self.ensure_order_capacity();
 
         let target_tile = Self::tile_coords_from_world(target_world);
-        if Self::tile_blocked(&self.chunk_cache, target_tile) {
+        let current_position = if let Some(drone) = self.world.drones().get(selected_index) {
+            Vec3::new(drone.position[0], drone.position[1], drone.position[2])
+        } else {
+            self.exit_move_mode();
+            return;
+        };
+        let start_tile = Self::tile_coords_from_world(current_position);
+
+        let blocked_tile = if Self::tile_blocked(&self.chunk_cache, target_tile) {
+            Some(target_tile)
+        } else {
+            let start_coord = WorldCoord::new(start_tile.0, start_tile.1, start_tile.2);
+            let end_coord = WorldCoord::new(target_tile.0, target_tile.1, target_tile.2);
+            self.chunk_cache
+                .first_solid_on_line(start_coord, end_coord)
+                .map(|coord| (coord.x, coord.y, coord.z))
+        };
+
+        if let Some((blocked_x, blocked_y, blocked_z)) = blocked_tile {
             let mut status = format!(
                 "blocked by wall at {}, {}, {}",
-                target_tile.0, target_tile.1, target_tile.2
+                blocked_x, blocked_y, blocked_z
             );
             if let Some(existing) = self.order_status_for(selected_index) {
                 status.push_str("; still ");
@@ -1391,13 +1409,6 @@ impl GameState {
             self.sync_selected_ui();
             return;
         }
-
-        let current_position = if let Some(drone) = self.world.drones().get(selected_index) {
-            Vec3::new(drone.position[0], drone.position[1], drone.position[2])
-        } else {
-            self.exit_move_mode();
-            return;
-        };
 
         match MoveOrder::for_target(current_position, target_tile) {
             Some(order) => {
@@ -1493,7 +1504,7 @@ mod tests {
         chunk_cache.populate_chunk_at(&generator, ChunkPosition::new(0, 0, 0));
         chunk_cache.populate_chunk_at(&generator, ChunkPosition::new(0, 0, 2));
 
-        assert!(GameState::tile_blocked(&chunk_cache, (1, 0, 0))); // stone/iron terrain
+        assert!(GameState::tile_blocked(&chunk_cache, (3, 0, 0))); // stone/iron terrain
         assert!(!GameState::tile_blocked(&chunk_cache, (0, 0, 10))); // generated air
     }
 }
