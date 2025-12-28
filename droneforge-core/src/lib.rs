@@ -10,7 +10,7 @@ pub mod tool;
 pub mod world;
 pub mod worldgen;
 
-pub use block::{AIR, BEDROCK, Block, BlockId, DIRT, IRON, STONE};
+pub use block::{is_placable_block, AIR, BEDROCK, Block, BlockId, CORE, DIRT, IRON, STONE};
 pub use chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkBlocks, ChunkError};
 pub use chunk_cache::{CachedChunk, ChunkCache};
 pub use coordinates::{ChunkPosition, LocalBlockCoord, WorldCoord};

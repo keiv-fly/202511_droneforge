@@ -1,9 +1,10 @@
 use d_gen_tileset::layout::{self, MASK_EAST, MASK_NORTH, MASK_SOUTH, MASK_WEST};
 use droneforge_core::chunk::CHUNK_HEIGHT;
+use droneforge_core::inventory::add_block_to_slots;
 use droneforge_core::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
 use droneforge_core::{
-    AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, DronePose, INVENTORY_SLOTS, IRON,
-    PlacementError, PlacementErrorReason, STONE, ToolController, World, WorldCoord,
+    is_placable_block, AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, DronePose, INVENTORY_SLOTS,
+    IRON, PlacementError, PlacementErrorReason, STONE, ToolController, World, WorldCoord, CORE,
 };
 #[cfg(target_arch = "wasm32")]
 use macroquad::miniquad;
@@ -13,7 +14,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use crate::drone::{DroneDrawConfig, draw_drone, drone_world_center, is_visible_at_view};
+use crate::core_draw::draw_core_at_screen;
+use crate::drone::{draw_drone, drone_world_center, is_visible_at_view, DroneDrawConfig};
 const VIEW_MIN_X: i32 = -100;
 const VIEW_MAX_X: i32 = 100;
 const VIEW_MIN_Y: i32 = -60;
@@ -34,6 +36,7 @@ const ZOOM_FACTOR: f32 = 1.1;
 const DRONE_MOVE_SPEED: f32 = 4.3;
 const FIXED_STEP_SECONDS: f32 = 1.0 / 60.0;
 
+mod core_draw;
 mod drone;
 
 const RENDER_CHUNK_SIZE: i32 = 32;
@@ -49,6 +52,8 @@ static PENDING_USE_TOGGLE: AtomicBool = AtomicBool::new(false);
 static USE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PENDING_TOOL_SLOT: AtomicI32 = AtomicI32::new(-1);
 static PENDING_TOOL_REQUEST: AtomicBool = AtomicBool::new(false);
+static PENDING_CORE_SLOT: AtomicI32 = AtomicI32::new(-1);
+static PENDING_CORE_REQUEST: AtomicBool = AtomicBool::new(false);
 
 static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
 static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
@@ -273,6 +278,17 @@ pub extern "C" fn block_tile_size() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn core_block_id() -> BlockId {
+    CORE
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn inventory_create_core(slot_index: u32) {
+    log_ui_action("inventory action: create core");
+    queue_core_request(slot_index as i32);
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn drone_action_move() {
     log_ui_action("drone action: move");
     PENDING_MOVE_TOGGLE.store(true, Ordering::SeqCst);
@@ -368,6 +384,24 @@ fn take_pending_tool_slot() -> Option<Option<usize>> {
     }
 }
 
+fn queue_core_request(slot_index: i32) {
+    PENDING_CORE_SLOT.store(slot_index, Ordering::SeqCst);
+    PENDING_CORE_REQUEST.store(true, Ordering::SeqCst);
+}
+
+fn take_pending_core_request() -> Option<usize> {
+    if !PENDING_CORE_REQUEST.swap(false, Ordering::SeqCst) {
+        return None;
+    }
+
+    let slot = PENDING_CORE_SLOT.load(Ordering::SeqCst);
+    if slot < 0 {
+        None
+    } else {
+        Some(slot as usize)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct RenderChunkKey {
     chunk_x: i32,
@@ -409,6 +443,7 @@ impl BlockPalette {
             droneforge_core::STONE => Color::from_rgba(120, 120, 120, 255),
             droneforge_core::IRON => Color::from_rgba(194, 133, 74, 255),
             BEDROCK => Color::from_rgba(45, 45, 45, 255),
+            CORE => Color::from_rgba(0, 53, 146, 255),
             _ => MAGENTA,
         }
     }
@@ -1081,7 +1116,7 @@ impl GameState {
                         let dst_y = dst_base_y.saturating_add(y);
 
                         if let Some(wall_block) = wall_block {
-                            if is_solid(wall_block) {
+                            if is_wall_block(wall_block) {
                                 let mask =
                                     wall_edge_mask(&self.chunk_cache, world_x, world_y, wall_z);
 
@@ -1105,17 +1140,19 @@ impl GameState {
                                     let color = palette.color_for(block);
                                     fill_block(&mut self.scratch_image, dst_x, dst_y, color);
                                 }
-                            } else if let Some(tile) = self.tiles.floor_region(block) {
-                                blit_tile_region(
-                                    &mut self.scratch_image,
-                                    self.tiles.atlas(),
-                                    tile,
-                                    dst_x,
-                                    dst_y,
-                                );
                             } else {
-                                let color = palette.color_for(block);
-                                fill_block(&mut self.scratch_image, dst_x, dst_y, color);
+                                if let Some(tile) = self.tiles.floor_region(block) {
+                                    blit_tile_region(
+                                        &mut self.scratch_image,
+                                        self.tiles.atlas(),
+                                        tile,
+                                        dst_x,
+                                        dst_y,
+                                    );
+                                } else {
+                                    let color = palette.color_for(block);
+                                    fill_block(&mut self.scratch_image, dst_x, dst_y, color);
+                                }
                             }
                         } else if let Some(tile) = self.tiles.floor_region(block) {
                             blit_tile_region(
@@ -1309,7 +1346,7 @@ impl GameState {
 
         let mut inventory_changed = false;
         if let Some(block) = mined_block {
-            if block == STONE || block == IRON {
+            if block == STONE || block == IRON || block == CORE {
                 inventory_changed = self.world.add_block_to_inventory(drone_index, block);
             }
         }
@@ -1368,6 +1405,7 @@ impl GameState {
             }
         }
 
+        self.render_cores(effective_block_size);
         self.render_drones(effective_block_size);
 
         draw_text(
@@ -1478,6 +1516,40 @@ impl GameState {
             let center_world = drone_world_center(drone);
             let center_screen = self.world_to_screen_f(center_world, effective_block_size);
             draw_drone(drone, center_screen, effective_block_size, &self.drone_draw);
+        }
+    }
+
+    fn visible_world_bounds(&self, effective_block_size: f32) -> (i32, i32, i32, i32) {
+        let top_left = self.screen_to_world(Vec2::new(0.0, 0.0), effective_block_size);
+        let bottom_right = self.screen_to_world(
+            Vec2::new(screen_width(), screen_height()),
+            effective_block_size,
+        );
+
+        let min_x = top_left.x.min(bottom_right.x).floor() as i32 - 1;
+        let max_x = top_left.x.max(bottom_right.x).ceil() as i32 + 1;
+        let min_y = top_left.y.min(bottom_right.y).floor() as i32 - 1;
+        let max_y = top_left.y.max(bottom_right.y).ceil() as i32 + 1;
+
+        (min_x, max_x, min_y, max_y)
+    }
+
+    fn render_core_at(&self, tile: (i32, i32), effective_block_size: f32) {
+        let center_world = vec2(tile.0 as f32 + 0.5, tile.1 as f32 + 0.5);
+        let center_screen = self.world_to_screen_f(center_world, effective_block_size);
+        draw_core_at_screen(center_screen, effective_block_size);
+    }
+
+    fn render_cores(&self, effective_block_size: f32) {
+        let (min_x, max_x, min_y, max_y) = self.visible_world_bounds(effective_block_size);
+        let z = self.view_z;
+
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                if block_at(&self.chunk_cache, x, y, z) == Some(CORE) {
+                    self.render_core_at((x, y), effective_block_size);
+                }
+            }
         }
     }
 
@@ -1630,6 +1702,10 @@ impl GameState {
                 self.tool_controller.clear_selection();
             }
             self.sync_tool_ui();
+        }
+
+        if let Some(slot_index) = take_pending_core_request() {
+            self.try_create_core_from_slot(slot_index);
         }
     }
 
@@ -1923,6 +1999,56 @@ impl GameState {
         self.sync_selected_ui();
     }
 
+    fn try_create_core_from_slot(&mut self, slot_index: usize) {
+        let Some(selected_index) = self.selected_drone else {
+            return;
+        };
+        let Some(slots) = self.world.inventory_mut(selected_index) else {
+            return;
+        };
+        if slot_index >= slots.len() {
+            self.selected_order = Some("invalid inventory slot".to_string());
+            self.sync_selected_ui();
+            return;
+        }
+
+        {
+            let slot = &mut slots[slot_index];
+            if slot.block != Some(STONE) || slot.count == 0 {
+                self.selected_order = Some("needs stone to create core".to_string());
+                self.sync_selected_ui();
+                return;
+            }
+
+            // Consume one stone.
+            slot.count = slot.count.saturating_sub(1);
+            if slot.count == 0 {
+                slot.block = None;
+            }
+        }
+
+        let added = add_block_to_slots(slots, CORE);
+        if !added {
+            if let Some(slot) = slots.get_mut(slot_index) {
+                // Restore the stone if we could not place the core.
+                if slot.block.is_none() {
+                    slot.block = Some(STONE);
+                    slot.count = 1;
+                } else {
+                    slot.count = slot.count.saturating_add(1);
+                }
+            }
+            self.selected_order = Some("inventory full; core not created".to_string());
+            self.sync_selected_ui();
+            return;
+        }
+
+        self.selected_order = Some("created core from stone".to_string());
+
+        self.tool_controller.refresh_from_inventory(slots);
+        self.sync_selected_ui();
+    }
+
     fn find_drone_at_screen(&self, screen_pos: Vec2, effective_block_size: f32) -> Option<usize> {
         let base_radius_px = self.drone_draw.radius_tiles * effective_block_size;
         let stroke_px = self.drone_draw.stroke_ratio * base_radius_px;
@@ -2076,6 +2202,12 @@ mod tests {
         assert!(progressed_final);
         assert_eq!(order.progress_percent(), 100);
     }
+
+    #[test]
+    fn core_is_solid_but_not_a_wall_block() {
+        assert!(is_solid(CORE));
+        assert!(!is_wall_block(CORE));
+    }
 }
 
 fn fill_block(image: &mut Image, block_x: usize, block_y: usize, color: Color) {
@@ -2141,23 +2273,31 @@ fn is_solid(block: BlockId) -> bool {
     block != AIR
 }
 
+fn is_wall_block(block: BlockId) -> bool {
+    is_solid(block) && !is_placable_block(block)
+}
+
 fn is_solid_opt(block: Option<BlockId>) -> bool {
     block.map_or(false, is_solid)
+}
+
+fn is_wall_opt(block: Option<BlockId>) -> bool {
+    block.map_or(false, is_wall_block)
 }
 
 fn wall_edge_mask(cache: &ChunkCache, x: i32, y: i32, z: i32) -> u8 {
     let mut mask = 0u8;
 
-    if !is_solid_opt(block_at(cache, x, y - 1, z)) {
+    if !is_wall_opt(block_at(cache, x, y - 1, z)) {
         mask |= MASK_NORTH;
     }
-    if !is_solid_opt(block_at(cache, x + 1, y, z)) {
+    if !is_wall_opt(block_at(cache, x + 1, y, z)) {
         mask |= MASK_EAST;
     }
-    if !is_solid_opt(block_at(cache, x, y + 1, z)) {
+    if !is_wall_opt(block_at(cache, x, y + 1, z)) {
         mask |= MASK_SOUTH;
     }
-    if !is_solid_opt(block_at(cache, x - 1, y, z)) {
+    if !is_wall_opt(block_at(cache, x - 1, y, z)) {
         mask |= MASK_WEST;
     }
 

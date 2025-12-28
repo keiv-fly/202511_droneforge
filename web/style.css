@@ -284,3 +284,39 @@ canvas#glcanvas {
   color: #ffffff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
+
+.inventory-action-menu {
+  position: fixed;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(36, 36, 36, 0.95);
+  color: #f7f7f7;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  z-index: 1400;
+  min-width: 150px;
+}
+
+.inventory-action-menu.is-visible {
+  display: flex;
+}
+
+.inventory-action-btn {
+  width: 100%;
+  border: 1px solid #6a6a6a;
+  border-radius: 8px;
+  background: #555;
+  color: #ffffff;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.inventory-action-btn:active {
+  transform: translateY(1px) scale(0.99);
+  background: #666;
+}

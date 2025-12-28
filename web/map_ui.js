@@ -23,7 +23,28 @@ const BLOCK_NAME_BY_ID = {
     4: "bedrock",
 };
 
+const STONE_BLOCK_ID = 2;
+let cachedCoreBlockId = null;
+
+const resolveCoreBlockId = () => {
+    const fn = wasm_exports?.core_block_id;
+    if (typeof fn === "function") {
+        cachedCoreBlockId = fn();
+    } else if (cachedCoreBlockId === null) {
+        cachedCoreBlockId = 5;
+    }
+    return cachedCoreBlockId;
+};
+
+const ensureCoreNameRegistered = () => {
+    const coreId = resolveCoreBlockId();
+    if (coreId && !BLOCK_NAME_BY_ID[coreId]) {
+        BLOCK_NAME_BY_ID[coreId] = "core";
+    }
+};
+
 const describeInventorySlot = (blockId, count) => {
+    ensureCoreNameRegistered();
     if (!blockId || !count) {
         return "Empty slot";
     }
@@ -72,12 +93,26 @@ window.addEventListener("load", () => {
     let toolPreviewCtx = null;
     let lastToolBlock = 0;
     let lastToolCount = 0;
+    let inventoryActionMenu = null;
+    let inventoryActionSlot = null;
+    let longPressTimer = null;
+    let suppressNextSlotClick = false;
 
     if (canvas) {
         canvas.addEventListener("contextmenu", (event) => {
             event.preventDefault();
         });
     }
+
+    document.addEventListener("pointerdown", (event) => {
+        if (!inventoryActionMenu || !inventoryActionMenu.classList.contains("is-visible")) {
+            return;
+        }
+        if (inventoryActionMenu.contains(event.target)) {
+            return;
+        }
+        closeInventoryActionMenu();
+    });
 
     zUp.addEventListener("click", () => {
         forwardZChange("z_level_up");
@@ -124,6 +159,11 @@ window.addEventListener("load", () => {
     };
 
     const handleInventorySlotClick = (slotIndex) => {
+        if (suppressNextSlotClick) {
+            suppressNextSlotClick = false;
+            return;
+        }
+        closeInventoryActionMenu();
         lastSelectedSlot = slotIndex;
         selectToolSlot(slotIndex);
         updateInventorySelectionText();
@@ -151,6 +191,23 @@ window.addEventListener("load", () => {
                     handleInventorySlotClick(i);
                 }
             });
+            slot.addEventListener("contextmenu", (event) => {
+                event.preventDefault();
+                openInventoryActionMenu(i, slot);
+            });
+            slot.addEventListener("pointerdown", (event) => {
+                if (event.pointerType === "touch") {
+                    clearLongPressTimer();
+                    longPressTimer = window.setTimeout(() => {
+                        longPressTimer = null;
+                        openInventoryActionMenu(i, slot);
+                    }, 550);
+                }
+            });
+            const cancelLongPress = () => clearLongPressTimer();
+            slot.addEventListener("pointerup", cancelLongPress);
+            slot.addEventListener("pointerleave", cancelLongPress);
+            slot.addEventListener("pointercancel", cancelLongPress);
 
             slot.append(canvas, count);
             inventoryGrid.appendChild(slot);
@@ -163,6 +220,96 @@ window.addEventListener("load", () => {
     const tileSizeFromWasm = () => {
         const fn = wasm_exports?.block_tile_size;
         return typeof fn === "function" ? fn() : 16;
+    };
+
+    const drawCoreIcon = (ctx, size) => {
+        if (!ctx) return;
+        const radius = Math.max(1, Math.floor(size * 0.5 - size * 0.2));
+        const cx = size / 2;
+        const cy = size / 2;
+        ctx.fillStyle = "#003592";
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - radius);
+        ctx.lineTo(cx + radius, cy);
+        ctx.lineTo(cx, cy + radius);
+        ctx.lineTo(cx - radius, cy);
+        ctx.closePath();
+        ctx.fill();
+    };
+
+    const clearLongPressTimer = () => {
+        if (longPressTimer) {
+            clearTimeout(longPressTimer);
+            longPressTimer = null;
+        }
+    };
+
+    const createInventoryActionMenu = () => {
+        if (inventoryActionMenu) return;
+        const menu = document.createElement("div");
+        menu.id = "inventory-action-menu";
+        menu.className = "inventory-action-menu";
+        const actionBtn = document.createElement("button");
+        actionBtn.type = "button";
+        actionBtn.className = "inventory-action-btn";
+        actionBtn.textContent = "create core";
+        actionBtn.addEventListener("click", () => {
+            if (inventoryActionSlot !== null) {
+                const fn = wasm_exports?.inventory_create_core;
+                if (typeof fn === "function") {
+                    fn(inventoryActionSlot);
+                }
+                closeInventoryActionMenu();
+                renderInventorySlots();
+            }
+        });
+        menu.appendChild(actionBtn);
+        document.body.appendChild(menu);
+        inventoryActionMenu = menu;
+    };
+
+    const closeInventoryActionMenu = () => {
+        if (!inventoryActionMenu) return;
+        inventoryActionMenu.classList.remove("is-visible");
+        inventoryActionMenu.style.display = "none";
+        inventoryActionSlot = null;
+        suppressNextSlotClick = false;
+    };
+
+    const positionInventoryActionMenu = (anchor) => {
+        if (!inventoryActionMenu || !anchor) return;
+        const rect = anchor.getBoundingClientRect();
+        inventoryActionMenu.style.display = "flex";
+        inventoryActionMenu.style.visibility = "hidden";
+        const { offsetWidth, offsetHeight } = inventoryActionMenu;
+        const margin = 8;
+        const width = offsetWidth || 160;
+        const height = offsetHeight || 60;
+        const left = Math.min(
+            window.innerWidth - width - margin,
+            rect.right + margin
+        );
+        const top = Math.min(
+            window.innerHeight - height - margin,
+            rect.top
+        );
+        inventoryActionMenu.style.left = `${Math.max(margin, left)}px`;
+        inventoryActionMenu.style.top = `${Math.max(margin, top)}px`;
+        inventoryActionMenu.style.visibility = "visible";
+    };
+
+    const openInventoryActionMenu = (slotIndex, anchor) => {
+        createInventoryActionMenu();
+        const block = inventorySlotBlocks[slotIndex] ?? 0;
+        const count = inventorySlotCounts[slotIndex] ?? 0;
+        if (block !== STONE_BLOCK_ID || count <= 0) {
+            closeInventoryActionMenu();
+            return;
+        }
+        inventoryActionSlot = slotIndex;
+        suppressNextSlotClick = true;
+        positionInventoryActionMenu(anchor);
+        inventoryActionMenu.classList.add("is-visible");
     };
 
     const ensureToolPreview = () => {
@@ -191,6 +338,7 @@ window.addEventListener("load", () => {
 
         const block = typeof blockFn === "function" ? blockFn() : 0;
         const count = typeof countFn === "function" ? countFn() : 0;
+        const isCoreBlock = block === resolveCoreBlockId();
 
         if (block === lastToolBlock && count === lastToolCount) {
             return;
@@ -206,7 +354,19 @@ window.addEventListener("load", () => {
         );
         selectionTool?.classList.toggle("has-tool", block !== 0 && count > 0);
 
-        if (!tilesetReady || block === 0 || count === 0) {
+        if (block === 0 || count === 0) {
+            return;
+        }
+
+        if (isCoreBlock) {
+            drawCoreIcon(
+                toolPreviewCtx,
+                Math.min(toolPreviewCanvas.width, toolPreviewCanvas.height)
+            );
+            return;
+        }
+
+        if (!tilesetReady) {
             return;
         }
 
@@ -234,11 +394,13 @@ window.addEventListener("load", () => {
     };
 
     const renderInventorySlots = () => {
+        ensureCoreNameRegistered();
         const blockFn = wasm_exports?.selected_drone_inventory_slot_block;
         const countFn = wasm_exports?.selected_drone_inventory_slot_count;
         const tileXFn = wasm_exports?.block_tile_pixel_x;
         const tileYFn = wasm_exports?.block_tile_pixel_y;
         const tileSize = tileSizeFromWasm();
+        const coreBlockId = resolveCoreBlockId();
 
         for (let i = 0; i < INVENTORY_SLOTS; i += 1) {
             const block =
@@ -265,7 +427,16 @@ window.addEventListener("load", () => {
             if (!ctx) continue;
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            if (!tilesetReady || block === 0 || count === 0) {
+            if (block === 0 || count === 0) {
+                continue;
+            }
+
+            if (block === coreBlockId) {
+                drawCoreIcon(ctx, Math.min(canvas.width, canvas.height));
+                continue;
+            }
+
+            if (!tilesetReady) {
                 continue;
             }
 
@@ -294,6 +465,14 @@ window.addEventListener("load", () => {
 
         updateInventorySelectionText();
         renderToolPreview();
+
+        if (inventoryActionSlot !== null) {
+            const activeBlock = inventorySlotBlocks[inventoryActionSlot] ?? 0;
+            const activeCount = inventorySlotCounts[inventoryActionSlot] ?? 0;
+            if (activeBlock !== STONE_BLOCK_ID || activeCount === 0) {
+                closeInventoryActionMenu();
+            }
+        }
     };
 
     const updateInventoryVisibility = (isPresent) => {
@@ -314,6 +493,7 @@ window.addEventListener("load", () => {
         }
         if (!shouldShow) {
             clearInventorySelection();
+            closeInventoryActionMenu();
         }
         if (shouldShow) {
             renderInventorySlots();

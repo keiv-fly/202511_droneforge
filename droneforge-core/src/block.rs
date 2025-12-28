@@ -7,6 +7,7 @@ pub const DIRT: BlockId = 1;
 pub const STONE: BlockId = 2;
 pub const IRON: BlockId = 3;
 pub const BEDROCK: BlockId = 4;
+pub const CORE: BlockId = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
@@ -21,6 +22,10 @@ impl Block {
             name: name.into(),
         }
     }
+}
+
+pub fn is_placable_block(block: BlockId) -> bool {
+    block == CORE
 }
 
 #[cfg(test)]
@@ -44,5 +49,12 @@ mod tests {
             serde_json::from_str(&serialized).expect("deserialization should succeed");
 
         assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn placable_block_flags_core_only() {
+        assert!(is_placable_block(CORE));
+        assert!(!is_placable_block(AIR));
+        assert!(!is_placable_block(STONE));
     }
 }
