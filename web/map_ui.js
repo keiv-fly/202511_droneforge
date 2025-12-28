@@ -68,6 +68,10 @@ window.addEventListener("load", () => {
     const inventorySlotCounts = Array(INVENTORY_SLOTS).fill(0);
     let lastSelectedSlot = null;
     let inventoryVisible = false;
+    let toolPreviewCanvas = null;
+    let toolPreviewCtx = null;
+    let lastToolBlock = 0;
+    let lastToolCount = 0;
 
     if (canvas) {
         canvas.addEventListener("contextmenu", (event) => {
@@ -103,9 +107,27 @@ window.addEventListener("load", () => {
         inventorySelection.textContent = describeInventorySlot(block, count);
     };
 
+    const selectToolSlot = (slotIndex) => {
+        const block = inventorySlotBlocks[slotIndex] ?? 0;
+        const count = inventorySlotCounts[slotIndex] ?? 0;
+        if (count > 0) {
+            const fn = wasm_exports?.tool_select_slot;
+            if (typeof fn === "function") {
+                fn(slotIndex);
+            }
+        } else {
+            const clearFn = wasm_exports?.tool_clear_selection;
+            if (typeof clearFn === "function") {
+                clearFn();
+            }
+        }
+    };
+
     const handleInventorySlotClick = (slotIndex) => {
         lastSelectedSlot = slotIndex;
+        selectToolSlot(slotIndex);
         updateInventorySelectionText();
+        renderToolPreview();
     };
 
     if (inventoryGrid) {
@@ -141,6 +163,74 @@ window.addEventListener("load", () => {
     const tileSizeFromWasm = () => {
         const fn = wasm_exports?.block_tile_size;
         return typeof fn === "function" ? fn() : 16;
+    };
+
+    const ensureToolPreview = () => {
+        if (toolPreviewCanvas || !selectionTool) {
+            return;
+        }
+        toolPreviewCanvas = document.createElement("canvas");
+        toolPreviewCanvas.className = "tool-preview";
+        toolPreviewCanvas.width = 28;
+        toolPreviewCanvas.height = 28;
+        toolPreviewCtx = toolPreviewCanvas.getContext("2d");
+        selectionTool.appendChild(toolPreviewCanvas);
+    };
+
+    const renderToolPreview = () => {
+        ensureToolPreview();
+        if (!toolPreviewCanvas || !toolPreviewCtx) {
+            return;
+        }
+
+        const blockFn = wasm_exports?.selected_tool_block;
+        const countFn = wasm_exports?.selected_tool_count;
+        const tileXFn = wasm_exports?.block_tile_pixel_x;
+        const tileYFn = wasm_exports?.block_tile_pixel_y;
+        const tileSize = tileSizeFromWasm();
+
+        const block = typeof blockFn === "function" ? blockFn() : 0;
+        const count = typeof countFn === "function" ? countFn() : 0;
+
+        if (block === lastToolBlock && count === lastToolCount) {
+            return;
+        }
+        lastToolBlock = block;
+        lastToolCount = count;
+
+        toolPreviewCtx.clearRect(
+            0,
+            0,
+            toolPreviewCanvas.width,
+            toolPreviewCanvas.height
+        );
+        selectionTool?.classList.toggle("has-tool", block !== 0 && count > 0);
+
+        if (!tilesetReady || block === 0 || count === 0) {
+            return;
+        }
+
+        const tileX =
+            typeof tileXFn === "function" ? tileXFn(block) : -1;
+        const tileY =
+            typeof tileYFn === "function" ? tileYFn(block) : -1;
+
+        if (tileX < 0 || tileY < 0) {
+            return;
+        }
+
+        toolPreviewCtx.imageSmoothingEnabled = false;
+        toolPreviewCtx.drawImage(
+            tilesetImage,
+            tileX,
+            tileY,
+            tileSize,
+            tileSize,
+            0,
+            0,
+            toolPreviewCanvas.width,
+            toolPreviewCanvas.height
+        );
     };
 
     const renderInventorySlots = () => {
@@ -203,6 +293,7 @@ window.addEventListener("load", () => {
         }
 
         updateInventorySelectionText();
+        renderToolPreview();
     };
 
     const updateInventoryVisibility = (isPresent) => {
@@ -329,6 +420,7 @@ window.addEventListener("load", () => {
                 useIsActive ? "true" : "false"
             );
         }
+        renderToolPreview();
         requestAnimationFrame(pumpSelectionUi);
     };
 

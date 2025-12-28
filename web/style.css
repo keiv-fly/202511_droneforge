@@ -194,6 +194,11 @@ canvas#glcanvas {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
   touch-action: manipulation;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .selection-btn.is-active {
@@ -205,6 +210,12 @@ canvas#glcanvas {
 .selection-btn:active {
   transform: translateY(1px) scale(0.98);
   background: #666;
+}
+
+.tool-preview {
+  width: 24px;
+  height: 24px;
+  image-rendering: pixelated;
 }
 
 .inventory-panel {

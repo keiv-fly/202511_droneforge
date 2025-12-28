@@ -2,8 +2,8 @@ use d_gen_tileset::layout::{self, MASK_EAST, MASK_NORTH, MASK_SOUTH, MASK_WEST};
 use droneforge_core::chunk::CHUNK_HEIGHT;
 use droneforge_core::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
 use droneforge_core::{
-    AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, DronePose, INVENTORY_SLOTS, IRON, STONE,
-    World, WorldCoord,
+    AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, DronePose, INVENTORY_SLOTS, IRON,
+    PlacementError, PlacementErrorReason, STONE, ToolController, World, WorldCoord,
 };
 #[cfg(target_arch = "wasm32")]
 use macroquad::miniquad;
@@ -47,6 +47,8 @@ static PENDING_MOVE_TOGGLE: AtomicBool = AtomicBool::new(false);
 static MOVE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static PENDING_USE_TOGGLE: AtomicBool = AtomicBool::new(false);
 static USE_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static PENDING_TOOL_SLOT: AtomicI32 = AtomicI32::new(-1);
+static PENDING_TOOL_REQUEST: AtomicBool = AtomicBool::new(false);
 
 static INITIAL_CHUNK_TOTAL: AtomicU32 = AtomicU32::new(0);
 static INITIAL_CHUNK_LOADED: AtomicU32 = AtomicU32::new(0);
@@ -67,6 +69,17 @@ struct SelectedDroneUi {
 fn selected_drone_ui() -> &'static Mutex<SelectedDroneUi> {
     static SELECTED_DRONE_UI: OnceLock<Mutex<SelectedDroneUi>> = OnceLock::new();
     SELECTED_DRONE_UI.get_or_init(|| Mutex::new(SelectedDroneUi::default()))
+}
+
+#[derive(Default)]
+struct SelectedToolUi {
+    block: BlockId,
+    count: u32,
+}
+
+fn selected_tool_ui() -> &'static Mutex<SelectedToolUi> {
+    static SELECTED_TOOL_UI: OnceLock<Mutex<SelectedToolUi>> = OnceLock::new();
+    SELECTED_TOOL_UI.get_or_init(|| Mutex::new(SelectedToolUi::default()))
 }
 
 #[derive(Default)]
@@ -225,6 +238,18 @@ pub extern "C" fn selected_drone_inventory_slot_count(slot_index: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn selected_tool_block() -> BlockId {
+    let ui = selected_tool_ui().lock().unwrap();
+    ui.block
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn selected_tool_count() -> u32 {
+    let ui = selected_tool_ui().lock().unwrap();
+    ui.count
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn block_tile_pixel_x(block: BlockId) -> i32 {
     let ui = tile_atlas_ui().lock().unwrap();
     ui.floor_tiles
@@ -257,6 +282,18 @@ pub extern "C" fn drone_action_move() {
 pub extern "C" fn drone_action_use() {
     log_ui_action("drone action: use");
     PENDING_USE_TOGGLE.store(true, Ordering::SeqCst);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tool_select_slot(slot_index: u32) {
+    log_ui_action("tool action: select slot");
+    queue_tool_slot(Some(slot_index as i32));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn tool_clear_selection() {
+    log_ui_action("tool action: clear selection");
+    queue_tool_slot(None);
 }
 
 #[unsafe(no_mangle)]
@@ -310,6 +347,25 @@ fn take_pending_use_toggle() -> bool {
 
 fn set_use_mode_active(active: bool) {
     USE_MODE_ACTIVE.store(active, Ordering::SeqCst);
+}
+
+fn queue_tool_slot(slot_index: Option<i32>) {
+    let value = slot_index.unwrap_or(-1);
+    PENDING_TOOL_SLOT.store(value, Ordering::SeqCst);
+    PENDING_TOOL_REQUEST.store(true, Ordering::SeqCst);
+}
+
+fn take_pending_tool_slot() -> Option<Option<usize>> {
+    if !PENDING_TOOL_REQUEST.swap(false, Ordering::SeqCst) {
+        return None;
+    }
+
+    let slot = PENDING_TOOL_SLOT.load(Ordering::SeqCst);
+    if slot < 0 {
+        Some(None)
+    } else {
+        Some(Some(slot as usize))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -651,6 +707,7 @@ pub struct GameState {
     selection_mode: SelectionMode,
     selected_drone: Option<usize>,
     selected_order: Option<String>,
+    tool_controller: ToolController,
     active_orders: Vec<Option<Order>>,
     render_chunk_xs: Vec<i32>,
     render_chunk_ys: Vec<i32>,
@@ -735,6 +792,7 @@ impl GameState {
             selection_mode: SelectionMode::Inspect,
             selected_drone: None,
             selected_order: None,
+            tool_controller: ToolController::new(),
             active_orders: vec![None; drone_count],
             render_chunk_xs,
             render_chunk_ys,
@@ -1249,13 +1307,23 @@ impl GameState {
         self.chunk_cache.record_save_time_ms(elapsed_ms);
         self.rendered_level_dirty = true;
 
+        let mut inventory_changed = false;
         if let Some(block) = mined_block {
             if block == STONE || block == IRON {
-                return self.world.add_block_to_inventory(drone_index, block);
+                inventory_changed = self.world.add_block_to_inventory(drone_index, block);
             }
         }
 
-        false
+        if inventory_changed && self.selected_drone == Some(drone_index) {
+            if let Some(slots) = self.world.inventory(drone_index) {
+                self.tool_controller.refresh_from_inventory(slots);
+            } else {
+                self.tool_controller.clear_selection();
+            }
+            self.sync_tool_ui();
+        }
+
+        inventory_changed
     }
 
     fn render(&mut self) {
@@ -1543,6 +1611,26 @@ impl GameState {
         if self.selection_mode == SelectionMode::UseTarget && self.selected_drone.is_none() {
             self.exit_use_mode();
         }
+
+        if let Some(request) = take_pending_tool_slot() {
+            if let Some(selected_index) = self.selected_drone {
+                if let Some(slots) = self.world.inventory(selected_index) {
+                    match request {
+                        Some(slot_index) => {
+                            self.tool_controller
+                                .select_from_inventory(slots, slot_index);
+                            self.tool_controller.refresh_from_inventory(slots);
+                        }
+                        None => self.tool_controller.clear_selection(),
+                    }
+                } else {
+                    self.tool_controller.clear_selection();
+                }
+            } else {
+                self.tool_controller.clear_selection();
+            }
+            self.sync_tool_ui();
+        }
     }
 
     fn handle_right_mouse_drag(&mut self) {
@@ -1601,7 +1689,12 @@ impl GameState {
         let effective_block_size = BLOCK_PIXEL_SIZE as f32 * self.zoom;
         let next_selection = self.find_drone_at_screen(screen_pos, effective_block_size);
 
+        let previous_selection = self.selected_drone;
         self.selected_drone = next_selection;
+        if self.selected_drone != previous_selection {
+            self.tool_controller.clear_selection();
+            self.sync_tool_ui();
+        }
         if let Some(index) = self.selected_drone {
             self.ensure_order_capacity();
             self.selected_order = self.order_status_for(index);
@@ -1738,6 +1831,45 @@ impl GameState {
         };
         let drone_tile = Self::tile_coords_from_world(current_position);
 
+        if self.tool_controller.selection().is_some() {
+            let target_coord = WorldCoord::new(target_tile.0, target_tile.1, target_tile.2);
+            let drone_coord = WorldCoord::new(drone_tile.0, drone_tile.1, drone_tile.2);
+            let placement_result = if let Some(slots) = self.world.inventory_mut(selected_index) {
+                let start = get_time();
+                let result = self.tool_controller.place_selected_block(
+                    slots,
+                    &mut self.chunk_cache,
+                    drone_coord,
+                    target_coord,
+                );
+                if result.is_ok() {
+                    let elapsed_ms = (get_time() - start) * 1000.0;
+                    self.chunk_cache.record_save_time_ms(elapsed_ms);
+                }
+                result
+            } else {
+                Err(PlacementError::new(PlacementErrorReason::SlotEmpty))
+            };
+
+            match placement_result {
+                Ok(_) => {
+                    self.rendered_level_dirty = true;
+                    self.selected_order = Some(format!(
+                        "placed block at {}, {}, {}",
+                        target_tile.0, target_tile.1, target_tile.2
+                    ));
+                }
+                Err(err) => {
+                    self.selected_order = Some(err.to_string());
+                }
+            }
+            self.refresh_tool_selection();
+            self.sync_tool_ui();
+            self.exit_use_mode();
+            self.sync_selected_ui();
+            return;
+        }
+
         let mut invalid_status: Option<String> = None;
 
         if target_tile.2 != drone_tile.2 {
@@ -1818,6 +1950,34 @@ impl GameState {
         closest.map(|(index, _)| index)
     }
 
+    fn refresh_tool_selection(&mut self) {
+        if let Some(selected_index) = self.selected_drone {
+            if let Some(slots) = self.world.inventory(selected_index) {
+                self.tool_controller.refresh_from_inventory(slots);
+                return;
+            }
+        }
+        self.tool_controller.clear_selection();
+    }
+
+    fn sync_tool_ui(&self) {
+        let mut ui = selected_tool_ui().lock().unwrap();
+        ui.block = AIR;
+        ui.count = 0;
+        if let Some(selected_index) = self.selected_drone {
+            if let Some(selection) = self.tool_controller.selection() {
+                if let Some(slots) = self.world.inventory(selected_index) {
+                    if let Some(slot) = slots.get(selection.slot_index) {
+                        if slot.block == Some(selection.block) && slot.count > 0 {
+                            ui.block = selection.block;
+                            ui.count = slot.count;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn sync_selected_ui(&self) {
         let mut ui = selected_drone_ui().lock().unwrap();
         if let Some(selected_index) = self.selected_drone {
@@ -1851,6 +2011,7 @@ impl GameState {
                         ui.inventory_counts[slot_idx] = slot.count;
                     }
                 }
+                self.sync_tool_ui();
                 return;
             }
         }
@@ -1864,6 +2025,7 @@ impl GameState {
         ui.progress_percent = 0;
         ui.inventory_blocks = [AIR; INVENTORY_SLOTS];
         ui.inventory_counts = [0; INVENTORY_SLOTS];
+        self.sync_tool_ui();
     }
 
     fn exit_move_mode(&mut self) {
