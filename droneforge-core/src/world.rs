@@ -165,7 +165,7 @@ mod tests {
     use crate::WorldCoord;
     use crate::chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH};
     use crate::worldgen::DeterministicMap;
-    use crate::{INVENTORY_SLOTS, IRON, STONE};
+    use crate::{INVENTORY_SLOTS, IRON, MAX_INVENTORY_UNITS, STONE};
 
     fn test_positions() -> ChunkPosition {
         ChunkPosition::new(0, 0, 0)
@@ -313,5 +313,26 @@ mod tests {
         }
 
         assert!(!world.add_block_to_inventory(0, 999));
+    }
+
+    #[test]
+    fn add_block_to_inventory_respects_unit_capacity() {
+        let mut world = World::new();
+        world.add_drone(DronePose::new([0.0, 0.0, 0.0], [1.0, 0.0], "d1", 10, 10));
+
+        for _ in 0..MAX_INVENTORY_UNITS {
+            assert!(world.add_block_to_inventory(0, STONE));
+        }
+
+        assert!(!world.add_block_to_inventory(0, STONE));
+
+        let total_units: u32 = world
+            .inventory(0)
+            .unwrap()
+            .iter()
+            .map(|slot| slot.count)
+            .sum();
+
+        assert_eq!(total_units, MAX_INVENTORY_UNITS);
     }
 }

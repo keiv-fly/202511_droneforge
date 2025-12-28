@@ -14,7 +14,7 @@ pub use chunk::{CHUNK_DEPTH, CHUNK_HEIGHT, CHUNK_WIDTH, Chunk, ChunkBlocks, Chun
 pub use chunk_cache::{CachedChunk, ChunkCache};
 pub use coordinates::{ChunkPosition, LocalBlockCoord, WorldCoord};
 pub use drone::DronePose;
-pub use inventory::{INVENTORY_SLOTS, InventorySlot, InventorySlots};
+pub use inventory::{INVENTORY_SLOTS, MAX_INVENTORY_UNITS, InventorySlot, InventorySlots};
 pub use storage::{LoadBlocksFn, SaveBlocksFn, StorageError};
 pub use world::World;
 pub use worldgen::DeterministicMap;
