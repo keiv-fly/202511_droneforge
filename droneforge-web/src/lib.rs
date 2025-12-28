@@ -2,7 +2,8 @@ use d_gen_tileset::layout::{self, MASK_EAST, MASK_NORTH, MASK_SOUTH, MASK_WEST};
 use droneforge_core::chunk::CHUNK_HEIGHT;
 use droneforge_core::worldgen::{DeterministicMap, HORIZONTAL_LIMIT, VERTICAL_LIMIT};
 use droneforge_core::{
-    AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, DronePose, IRON, STONE, World, WorldCoord,
+    AIR, BEDROCK, BlockId, ChunkCache, ChunkPosition, DronePose, INVENTORY_SLOTS, IRON, STONE,
+    World, WorldCoord,
 };
 #[cfg(target_arch = "wasm32")]
 use macroquad::miniquad;
@@ -32,7 +33,6 @@ const MAX_ZOOM_POWER: i32 = 15;
 const ZOOM_FACTOR: f32 = 1.1;
 const DRONE_MOVE_SPEED: f32 = 4.3;
 const FIXED_STEP_SECONDS: f32 = 1.0 / 60.0;
-const INVENTORY_SLOTS: usize = 10;
 
 mod drone;
 
@@ -498,12 +498,6 @@ impl DigOrder {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct InventorySlot {
-    block: Option<BlockId>,
-    count: u32,
-}
-
 impl TileSet {
     async fn load_from_assets() -> Self {
         let atlas = load_image(TILESET_PATH)
@@ -658,7 +652,6 @@ pub struct GameState {
     selected_drone: Option<usize>,
     selected_order: Option<String>,
     active_orders: Vec<Option<Order>>,
-    inventories: Vec<[InventorySlot; INVENTORY_SLOTS]>,
     render_chunk_xs: Vec<i32>,
     render_chunk_ys: Vec<i32>,
     world_chunk_xs: Vec<i32>,
@@ -743,7 +736,6 @@ impl GameState {
             selected_drone: None,
             selected_order: None,
             active_orders: vec![None; drone_count],
-            inventories: vec![[InventorySlot::default(); INVENTORY_SLOTS]; drone_count],
             render_chunk_xs,
             render_chunk_ys,
             world_chunk_xs,
@@ -1135,7 +1127,6 @@ impl GameState {
 
     fn advance_drone_orders(&mut self, delta_seconds: f32) {
         self.ensure_order_capacity();
-        self.ensure_inventory_capacity();
         let drone_count = self.world.drones().len();
         let mut ui_dirty = false;
 
@@ -1260,7 +1251,7 @@ impl GameState {
 
         if let Some(block) = mined_block {
             if block == STONE || block == IRON {
-                return self.add_block_to_inventory(drone_index, block);
+                return self.world.add_block_to_inventory(drone_index, block);
             }
         }
 
@@ -1590,34 +1581,6 @@ impl GameState {
         }
     }
 
-    fn ensure_inventory_capacity(&mut self) {
-        let drone_count = self.world.drones().len();
-        if self.inventories.len() < drone_count {
-            self.inventories
-                .resize(drone_count, [InventorySlot::default(); INVENTORY_SLOTS]);
-        }
-    }
-
-    fn add_block_to_inventory(&mut self, drone_index: usize, block: BlockId) -> bool {
-        self.ensure_inventory_capacity();
-        let Some(slots) = self.inventories.get_mut(drone_index) else {
-            return false;
-        };
-
-        if let Some(slot) = slots.iter_mut().find(|slot| slot.block == Some(block)) {
-            slot.count = slot.count.saturating_add(1);
-            return true;
-        }
-
-        if let Some(slot) = slots.iter_mut().find(|slot| slot.block.is_none()) {
-            slot.block = Some(block);
-            slot.count = 1;
-            return true;
-        }
-
-        false
-    }
-
     fn order_status_for(&self, index: usize) -> Option<String> {
         self.active_orders
             .get(index)
@@ -1879,7 +1842,7 @@ impl GameState {
                 }
                 ui.inventory_blocks = [AIR; INVENTORY_SLOTS];
                 ui.inventory_counts = [0; INVENTORY_SLOTS];
-                if let Some(slots) = self.inventories.get(selected_index) {
+                if let Some(slots) = self.world.inventory(selected_index) {
                     for (slot_idx, slot) in slots.iter().enumerate() {
                         if slot_idx >= INVENTORY_SLOTS {
                             break;
