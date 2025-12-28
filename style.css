@@ -1,0 +1,322 @@
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: black;
+  overflow: hidden;
+}
+
+canvas#glcanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#start-screen {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: black;
+  z-index: 2000;
+}
+
+.start-card {
+  background: #0f0f0f;
+  color: #f2f2f2;
+  padding: 24px 24px 20px;
+  border-radius: 16px;
+  width: min(420px, 90vw);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.loading-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.loading-status {
+  font-size: 0.95rem;
+  color: #b0b0b0;
+}
+
+.progress-track {
+  width: 100%;
+  height: 12px;
+  background: #1f1f1f;
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-track[role="progressbar"] {
+  outline: none;
+}
+
+.progress-fill {
+  position: absolute;
+  inset: 0;
+  width: 0;
+  background: linear-gradient(90deg, #3ec7ff, #7af3c4);
+  transition: width 0.2s ease;
+}
+
+.progress-detail {
+  font-size: 0.92rem;
+  color: #d8d8d8;
+  min-height: 1.3em;
+}
+
+#start-button {
+  font-size: 1.25rem;
+  padding: 1rem 2rem;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  background: white;
+  color: black;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.4);
+  width: 100%;
+}
+
+#start-button:active {
+  transform: scale(0.97);
+}
+
+#start-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.loading-error {
+  color: #ffb3b3;
+  font-size: 0.95rem;
+}
+
+.z-level-controls {
+  position: fixed;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+}
+
+.z-btn {
+  width: 46px;
+  height: 46px;
+  font-size: 32px;
+  border-radius: 14px;
+  border: none;
+  outline: none;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.z-btn:active {
+  transform: translateY(1px) scale(0.97);
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.selection-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(36, 36, 36, 0.92);
+  color: #f7f7f7;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  z-index: 1200;
+}
+
+.selection-text {
+  font-size: 16px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  white-space: pre-line;
+}
+
+.selection-progress {
+  width: 180px;
+  display: none;
+}
+
+.selection-progress-track {
+  width: 100%;
+  height: 10px;
+  border: 1px solid #ffffff;
+  border-radius: 4px;
+  background: transparent;
+  overflow: hidden;
+}
+
+.selection-progress-fill {
+  width: 0;
+  height: 100%;
+  background: #ffffff;
+}
+
+.selection-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.selection-btn {
+  width: 64px;
+  height: 64px;
+  border: 1px solid #6a6a6a;
+  border-radius: 8px;
+  background: #555;
+  color: white;
+  cursor: pointer;
+  font-size: 14px;
+  text-transform: lowercase;
+  white-space: pre-line;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  touch-action: manipulation;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.selection-btn.is-active {
+  background: #777;
+  border-color: #9ec8ff;
+  box-shadow: 0 0 0 2px rgba(122, 243, 196, 0.35) inset;
+}
+
+.selection-btn:active {
+  transform: translateY(1px) scale(0.98);
+  background: #666;
+}
+
+.tool-preview {
+  width: 24px;
+  height: 24px;
+  image-rendering: pixelated;
+}
+
+.inventory-panel {
+  width: 100%;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inventory-panel.is-visible {
+  display: flex;
+}
+
+.inventory-header {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #dedede;
+}
+
+.inventory-selection {
+  min-height: 18px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: #f0f0f0;
+}
+
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+
+.inventory-slot {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  background: #555;
+  border: 1px solid #6a6a6a;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.inventory-slot:focus-visible {
+  outline: 2px solid #9ec8ff;
+  outline-offset: 2px;
+}
+
+.inventory-icon {
+  width: 42px;
+  height: 42px;
+  image-rendering: pixelated;
+}
+
+.inventory-count {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 12px;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.inventory-action-menu {
+  position: fixed;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: rgba(36, 36, 36, 0.95);
+  color: #f7f7f7;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  z-index: 1400;
+  min-width: 150px;
+}
+
+.inventory-action-menu.is-visible {
+  display: flex;
+}
+
+.inventory-action-btn {
+  width: 100%;
+  border: 1px solid #6a6a6a;
+  border-radius: 8px;
+  background: #555;
+  color: #ffffff;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.inventory-action-btn:active {
+  transform: translateY(1px) scale(0.99);
+  background: #666;
+}
